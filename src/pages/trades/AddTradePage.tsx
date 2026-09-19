@@ -5,7 +5,7 @@ import { db, withSyncMeta } from '../../db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { syncToCloud } from '../../services/sync';
-import { uploadScreenshot, getScreenshotUrl } from '../../services/storage';
+import { uploadScreenshot, getScreenshotUrl, validateScreenshotFile, deleteScreenshot } from '../../services/storage';
 import type { Direction, TradeStatus, TradeResult, Visibility, Emotion, Trade, LocalStrategy } from '../../types';
 import { EMOTIONS } from '../../types';
 import { EMOTION_LABELS, STATUS_LABELS, RESULT_LABELS } from '../../locales/translations';
@@ -53,6 +53,7 @@ export default function AddTradePage() {
   const [direction, setDirection] = useState<Direction>('long');
   const [status, setStatus] = useState<TradeStatus>('closed');
   const [result, setResult] = useState<TradeResult>('none');
+  const [pnlInput, setPnlInput] = useState('');
   const [tradeDate, setTradeDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [strategyId, setStrategyId] = useState('');
   const [entryPrice, setEntryPrice] = useState('');
@@ -91,6 +92,7 @@ export default function AddTradePage() {
       setDirection(existingTrade.direction);
       setStatus(existingTrade.status);
       setResult(existingTrade.result ?? 'none');
+      setPnlInput(existingTrade.pnl != null ? existingTrade.pnl.toString() : '');
       setTradeDate(existingTrade.trade_date);
       setStrategyId(existingTrade.strategy_id ?? '');
       setEntryPrice(existingTrade.entry_price?.toString() ?? '');
@@ -148,6 +150,9 @@ export default function AddTradePage() {
     setVisibility(latestTrade.visibility);
   };
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   // Helper to recompute auto SL/TP
   const applyAutoSlTp = (entryVal: string, dir: Direction) => {
     const num = Number(entryVal);
@@ -179,8 +184,9 @@ export default function AddTradePage() {
 
   const handleSelectBeforeFile = (file: File | null) => {
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setError('ขนาดไฟล์เกิน 5 MB กรุณาเลือกไฟล์ใหม่');
+    const { valid, error: validationErr } = validateScreenshotFile(file);
+    if (!valid) {
+      setError(validationErr ?? 'ไฟล์ไม่ถูกต้อง');
       return;
     }
     setError('');
@@ -190,8 +196,9 @@ export default function AddTradePage() {
 
   const handleSelectAfterFile = (file: File | null) => {
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setError('ขนาดไฟล์เกิน 5 MB กรุณาเลือกไฟล์ใหม่');
+    const { valid, error: validationErr } = validateScreenshotFile(file);
+    if (!valid) {
+      setError(validationErr ?? 'ไฟล์ไม่ถูกต้อง');
       return;
     }
     setError('');
@@ -211,6 +218,38 @@ export default function AddTradePage() {
     setScreenshotAfter(null);
     setExistingAfterPath(null);
     setPreviewAfterUrl(null);
+  };
+
+  const handleDeleteTrade = async () => {
+    if (!existingTrade || !id) return;
+    setDeleting(true);
+    try {
+      // Soft-delete locally and set pending sync status
+      await db.trades.update(id, {
+        _sync_status: 'pending',
+        _deleted_at: new Date().toISOString(),
+        _updated_at: new Date().toISOString(),
+      });
+
+      // Clean up associated screenshots from Supabase Storage if present
+      if (existingTrade.screenshot_before) {
+        deleteScreenshot(existingTrade.screenshot_before).catch(() => {});
+      }
+      if (existingTrade.screenshot_after) {
+        deleteScreenshot(existingTrade.screenshot_after).catch(() => {});
+      }
+
+      // Trigger background sync to delete from Supabase
+      syncToCloud().catch(() => {});
+
+      setShowDeleteConfirm(false);
+      navigate('/trades');
+    } catch (err) {
+      console.error('Error deleting trade:', err);
+      setError('เกิดข้อผิดพลาดในการลบรายการเทรด');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -233,24 +272,23 @@ export default function AddTradePage() {
     // Upload screenshots if provided
     let screenshotBeforePath = existingBeforePath;
     let screenshotAfterPath = existingAfterPath;
+    const uploadWarnings: string[] = [];
 
     if (screenshotBefore) {
       const res = await uploadScreenshot(screenshotBefore, workspace.id, tradeId, 'before');
       if (res.error) {
-        setError(`อัปโหลดภาพก่อนเข้าไม่สำเร็จ: ${res.error}`);
-        setSaving(false);
-        return;
+        uploadWarnings.push(`ภาพก่อนเข้า: ${res.error}`);
+      } else {
+        screenshotBeforePath = res.path;
       }
-      screenshotBeforePath = res.path;
     }
     if (screenshotAfter) {
       const res = await uploadScreenshot(screenshotAfter, workspace.id, tradeId, 'after');
       if (res.error) {
-        setError(`อัปโหลดภาพหลังปิดไม่สำเร็จ: ${res.error}`);
-        setSaving(false);
-        return;
+        uploadWarnings.push(`ภาพหลังปิด: ${res.error}`);
+      } else {
+        screenshotAfterPath = res.path;
       }
-      screenshotAfterPath = res.path;
     }
 
     const now = new Date().toISOString();
@@ -263,6 +301,7 @@ export default function AddTradePage() {
       direction,
       status,
       result,
+      pnl: parseNum(pnlInput),
       trade_date: tradeDate,
       strategy_id: strategyId || null,
       entry_price: parseNum(entryPrice),
@@ -286,12 +325,22 @@ export default function AddTradePage() {
       updated_at: now,
     };
 
-    await db.trades.put(withSyncMeta(tradeData, 'pending'));
-
-    // Attempt sync
-    syncToCloud().catch(() => {});
+    try {
+      await db.trades.put(withSyncMeta(tradeData, 'pending'));
+      syncToCloud().catch(() => {});
+    } catch (err) {
+      console.error('Error saving trade to local database:', err);
+      setError('ไม่สามารถบันทึกข้อมูลรายการเทรดลงฐานข้อมูลได้');
+      setSaving(false);
+      return;
+    }
 
     setSaving(false);
+
+    if (uploadWarnings.length > 0) {
+      alert(`บันทึกข้อมูลการเทรดสำเร็จ แต่อัปโหลดรูปภาพบางรูปไม่สำเร็จ:\n- ${uploadWarnings.join('\n- ')}`);
+    }
+
     navigate('/trades');
   };
 
@@ -348,14 +397,27 @@ export default function AddTradePage() {
               </select>
             </div>
           </div>
-          <div className="form-group">
-            <label htmlFor="result">ผลลัพธ์การเทรด (Trade Result)</label>
-            <select id="result" value={result} onChange={e => setResult(e.target.value as TradeResult)}>
-              <option value="none">{RESULT_LABELS.none}</option>
-              <option value="tp">TP (Take Profit)</option>
-              <option value="sl">SL (Stop Loss)</option>
-              <option value="be">BE (Break-Even เสมอตัว)</option>
-            </select>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="result">ผลลัพธ์การเทรด (Trade Result)</label>
+              <select id="result" value={result} onChange={e => setResult(e.target.value as TradeResult)}>
+                <option value="none">{RESULT_LABELS.none}</option>
+                <option value="tp">TP (Take Profit)</option>
+                <option value="sl">SL (Stop Loss)</option>
+                <option value="be">BE (Break-Even เสมอตัว)</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label htmlFor="pnl">กำไร/ขาดทุนจริง (Realized P&L in USD)</label>
+              <input
+                id="pnl"
+                type="number"
+                step="any"
+                value={pnlInput}
+                onChange={e => setPnlInput(e.target.value)}
+                placeholder="เช่น 125.50 หรือ -75.25"
+              />
+            </div>
           </div>
         </div>
 
@@ -536,7 +598,7 @@ export default function AddTradePage() {
               ) : (
                 <label className="screenshot-upload">
                   <div>📷 คลิกเพื่ออัปโหลดภาพก่อนเข้าสถานะ</div>
-                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 5 MB)</div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 40 MB)</div>
                   <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)} />
                 </label>
               )}
@@ -564,7 +626,7 @@ export default function AddTradePage() {
               ) : (
                 <label className="screenshot-upload">
                   <div>📷 คลิกเพื่ออัปโหลดภาพหลังปิดสถานะ</div>
-                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 5 MB)</div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 40 MB)</div>
                   <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)} />
                 </label>
               )}
@@ -583,16 +645,63 @@ export default function AddTradePage() {
           </div>
         </div>
 
-        {/* Submit */}
-        <div className="flex gap-3">
-          <button type="submit" className="btn btn-primary btn-lg" disabled={saving}>
-            {saving ? 'กำลังบันทึก…' : isEdit ? 'อัปเดตรายการเทรด' : 'บันทึกรายการเทรด'}
-          </button>
-          <button type="button" className="btn btn-secondary btn-lg" onClick={() => navigate(-1)}>
-            ยกเลิก
-          </button>
+        {/* Submit & Delete */}
+        <div className="flex justify-between items-center gap-3">
+          <div className="flex gap-3">
+            <button type="submit" className="btn btn-primary btn-lg" disabled={saving}>
+              {saving ? 'กำลังบันทึก…' : isEdit ? 'อัปเดตรายการเทรด' : 'บันทึกรายการเทรด'}
+            </button>
+            <button type="button" className="btn btn-secondary btn-lg" onClick={() => navigate(-1)}>
+              ยกเลิก
+            </button>
+          </div>
+
+          {isEdit && existingTrade && (existingTrade.user_id === user?.id) && (
+            <button
+              type="button"
+              className="btn btn-danger btn-lg"
+              onClick={() => setShowDeleteConfirm(true)}
+              disabled={saving || deleting}
+            >
+              🗑️ ลบรายการเทรด
+            </button>
+          )}
         </div>
       </form>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && existingTrade && (
+        <div className="modal-overlay" onClick={() => !deleting && setShowDeleteConfirm(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h2 className="modal-title text-negative">ยืนยันการลบรายการเทรด</h2>
+            <div style={{ marginBottom: 'var(--space-4)', lineHeight: '1.6', fontSize: 'var(--text-base)' }}>
+              คุณแน่ใจหรือไม่ว่าต้องการลบรายการเทรด <strong>{existingTrade.asset}</strong> ({existingTrade.direction.toUpperCase()})?
+              <div style={{ marginTop: '8px', color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
+                ⚠️ การลบนี้จะนำผลกำไร/ขาดทุนออกจากเงินทุนและสถิติต่างๆ และไม่สามารถย้อนกลับได้
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={deleting}
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={deleting}
+                onClick={handleDeleteTrade}
+              >
+                {deleting ? 'กำลังลบ…' : 'ยืนยันการลบ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

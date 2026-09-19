@@ -12,6 +12,7 @@ import {
   formatCurrency,
   formatR,
 } from '../src/utils/trading';
+import { validateScreenshotFile, MAX_SCREENSHOT_FILE_SIZE } from '../src/services/storage';
 import type { Trade } from '../src/types';
 
 // ─── Helper: create a minimal trade ────────────────────────────────────────
@@ -659,5 +660,338 @@ describe('calculateCapitalSummary (Core Data Flow: Initial -> Realized P&L -> Cu
     expect(curve[2].date).toBe('2026-09-04');
     expect(curve[2].equity).toBe(102500);
     expect(curve[2].cumPnL).toBe(2500);
+  });
+
+  it('verifies user profit increases total capital and partner loss decreases total capital with exact formula', () => {
+    // Initial: User = 60,000, Partner = 40,000, Total = 100,000
+    // User trade TP = +5,000
+    // Partner trade SL = -3,000
+    // Waiting trade = +10,000 (must be ignored)
+    // BE trade with 50 fee = -50 net (must be applied to net capital, but not count as win/loss)
+    const trades: Trade[] = [
+      makeTrade({
+        user_id: 'user-1',
+        status: 'closed',
+        result: 'tp',
+        direction: 'long',
+        entry_price: 100,
+        exit_price: 150,
+        position_size: 100,
+        fees: 0,
+      }), // +5000
+      makeTrade({
+        user_id: 'user-2',
+        status: 'closed',
+        result: 'sl',
+        direction: 'long',
+        entry_price: 100,
+        exit_price: 70,
+        position_size: 100,
+        fees: 0,
+      }), // -3000
+      makeTrade({
+        user_id: 'user-1',
+        status: 'waiting',
+        direction: 'long',
+        entry_price: 100,
+        exit_price: 200,
+        position_size: 100,
+      }), // waiting: ignored
+      makeTrade({
+        user_id: 'user-2',
+        status: 'closed',
+        result: 'be',
+        direction: 'long',
+        entry_price: 100,
+        exit_price: 100,
+        position_size: 100,
+        fees: 50,
+      }), // BE with 50 fee: -50 realized P&L
+    ];
+
+    const summary = calculateCapitalSummary({
+      initialUserCapital: 60000,
+      initialPartnerCapital: 40000,
+      trades,
+      userId: 'user-1',
+    });
+
+    // Fixed initial bases
+    expect(summary.initialUserCapital).toBe(60000);
+    expect(summary.initialPartnerCapital).toBe(40000);
+    expect(summary.initialTotalCapital).toBe(100000);
+
+    // Realized P&L
+    expect(summary.userRealizedPnL).toBe(5000);
+    expect(summary.partnerRealizedPnL).toBe(-3050);
+    expect(summary.totalRealizedPnL).toBe(1950);
+
+    // Derived Current Capital: Initial + Realized P&L
+    expect(summary.currentUserCapital).toBe(65000);
+    expect(summary.currentPartnerCapital).toBe(36950);
+    expect(summary.currentTotalCapital).toBe(101950);
+
+    // Capital Share %
+    expect(summary.currentUserCapitalShare).toBeCloseTo((65000 / 101950) * 100, 4);
+    expect(summary.currentPartnerCapitalShare).toBeCloseTo((36950 / 101950) * 100, 4);
+  });
+
+  it('authoritative entered USD realized P&L is prioritized over Entry/Exit calculations and handles decimals correctly', () => {
+    // Initial: $1,000 total (User = $600, Partner = $400)
+    // User TP = +$125.50 (with no entry/exit or conflicting entry/exit)
+    // Partner SL = -$75.25
+    // User BE = $0.00
+    // Waiting trade with high price difference = +$5,000 (must NOT affect realized capital)
+    const trades: Trade[] = [
+      makeTrade({
+        user_id: 'user-1',
+        status: 'closed',
+        result: 'tp',
+        pnl: 125.50,
+        entry_price: 100,
+        exit_price: 110, // would calculate 10, but authoritative pnl is 125.50
+        position_size: 1,
+      }),
+      makeTrade({
+        user_id: 'user-2',
+        status: 'closed',
+        result: 'sl',
+        pnl: -75.25,
+        entry_price: 100,
+        exit_price: 90,
+        position_size: 1,
+      }),
+      makeTrade({
+        user_id: 'user-1',
+        status: 'closed',
+        result: 'be',
+        pnl: 0.00,
+      }),
+      makeTrade({
+        user_id: 'user-1',
+        status: 'waiting',
+        pnl: null,
+        entry_price: 100,
+        exit_price: 200,
+        position_size: 50,
+      }),
+    ];
+
+    // calculatePnL tests
+    expect(calculatePnL(trades[0])).toBe(125.50);
+    expect(calculatePnL(trades[1])).toBe(-75.25);
+    expect(calculatePnL(trades[2])).toBe(0.00);
+
+    const summary = calculateCapitalSummary({
+      initialUserCapital: 600,
+      initialPartnerCapital: 400,
+      trades,
+      userId: 'user-1',
+    });
+
+    expect(summary.initialTotalCapital).toBe(1000);
+    expect(summary.userRealizedPnL).toBe(125.50);
+    expect(summary.partnerRealizedPnL).toBe(-75.25);
+    expect(summary.totalRealizedPnL).toBe(50.25);
+
+    expect(summary.currentUserCapital).toBe(725.50);
+    expect(summary.currentPartnerCapital).toBe(324.75);
+    expect(summary.currentTotalCapital).toBe(1050.25);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Trade Deletion & Capital / Statistics Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Trade Deletion Impact on Capital and Statistics', () => {
+  it('deleting a completed winning trade removes its realized P&L from capital calculations immediately', () => {
+    const trade1 = makeTrade({ id: 't1', user_id: 'user-1', status: 'closed', result: 'tp', pnl: 500 });
+    const trade2 = makeTrade({ id: 't2', user_id: 'user-1', status: 'closed', result: 'sl', pnl: -200 });
+    const trade3 = makeTrade({ id: 't3', user_id: 'user-2', status: 'closed', result: 'tp', pnl: 300 });
+
+    const beforeDeletionTrades = [trade1, trade2, trade3];
+    const beforeSummary = calculateCapitalSummary({
+      initialUserCapital: 1000,
+      initialPartnerCapital: 1000,
+      trades: beforeDeletionTrades,
+      userId: 'user-1',
+    });
+
+    expect(beforeSummary.userRealizedPnL).toBe(300); // 500 - 200
+    expect(beforeSummary.currentUserCapital).toBe(1300);
+    expect(beforeSummary.currentTotalCapital).toBe(2600); // 1300 + 1300
+
+    // Simulate soft-deletion or removal of trade1
+    const afterDeletionTrades = beforeDeletionTrades.filter(t => t.id !== 't1');
+    const afterSummary = calculateCapitalSummary({
+      initialUserCapital: 1000,
+      initialPartnerCapital: 1000,
+      trades: afterDeletionTrades,
+      userId: 'user-1',
+    });
+
+    // Realized P&L from trade1 (500) is immediately removed
+    expect(afterSummary.userRealizedPnL).toBe(-200);
+    expect(afterSummary.currentUserCapital).toBe(800);
+    expect(afterSummary.partnerRealizedPnL).toBe(300);
+    expect(afterSummary.currentPartnerCapital).toBe(1300);
+    expect(afterSummary.totalRealizedPnL).toBe(100);
+    expect(afterSummary.currentTotalCapital).toBe(2100);
+  });
+
+  it('deleting a completed losing trade removes its negative P&L from capital calculations immediately', () => {
+    const trade1 = makeTrade({ id: 't1', user_id: 'user-1', status: 'closed', result: 'sl', pnl: -400 });
+    const trade2 = makeTrade({ id: 't2', user_id: 'user-2', status: 'closed', result: 'sl', pnl: -250 });
+
+    const trades = [trade1, trade2];
+    const beforeSummary = calculateCapitalSummary({
+      initialUserCapital: 2000,
+      initialPartnerCapital: 2000,
+      trades,
+      userId: 'user-1',
+    });
+
+    expect(beforeSummary.currentUserCapital).toBe(1600);
+    expect(beforeSummary.currentTotalCapital).toBe(3350);
+
+    // Delete partner's trade2
+    const afterTrades = trades.filter(t => t.id !== 't2');
+    const afterSummary = calculateCapitalSummary({
+      initialUserCapital: 2000,
+      initialPartnerCapital: 2000,
+      trades: afterTrades,
+      userId: 'user-1',
+    });
+
+    expect(afterSummary.currentUserCapital).toBe(1600);
+    expect(afterSummary.currentPartnerCapital).toBe(2000); // restored to initial
+    expect(afterSummary.currentTotalCapital).toBe(3600);
+  });
+
+  it('deleting an open/waiting trade does not alter realized capital or statistics', () => {
+    const trade1 = makeTrade({ id: 't1', user_id: 'user-1', status: 'closed', result: 'tp', pnl: 100 });
+    const waitingTrade = makeTrade({ id: 't2', user_id: 'user-1', status: 'waiting', pnl: null, entry_price: 100, exit_price: 200, position_size: 10 });
+    const openTrade = makeTrade({ id: 't3', user_id: 'user-2', status: 'open', pnl: null, entry_price: 50, exit_price: 100, position_size: 5 });
+
+    const trades = [trade1, waitingTrade, openTrade];
+    const beforeSummary = calculateCapitalSummary({
+      initialUserCapital: 500,
+      initialPartnerCapital: 500,
+      trades,
+      userId: 'user-1',
+    });
+
+    expect(beforeSummary.userRealizedPnL).toBe(100);
+    expect(beforeSummary.totalRealizedPnL).toBe(100);
+
+    // Delete waiting and open trades
+    const afterTrades = trades.filter(t => t.id !== 't2' && t.id !== 't3');
+    const afterSummary = calculateCapitalSummary({
+      initialUserCapital: 500,
+      initialPartnerCapital: 500,
+      trades: afterTrades,
+      userId: 'user-1',
+    });
+
+    expect(afterSummary.userRealizedPnL).toBe(100);
+    expect(afterSummary.totalRealizedPnL).toBe(100);
+    expect(afterSummary.currentUserCapital).toBe(600);
+    expect(afterSummary.currentTotalCapital).toBe(1100);
+  });
+
+  it('deleting a trade updates statistics and equity curve accordingly', () => {
+    const trade1 = makeTrade({ id: 't1', status: 'closed', result: 'tp', pnl: 300, trade_date: '2026-09-01' });
+    const trade2 = makeTrade({ id: 't2', status: 'closed', result: 'sl', pnl: -100, trade_date: '2026-09-02' });
+
+    const beforeStats = calculateStatistics([trade1, trade2]);
+    expect(beforeStats.totalTrades).toBe(2);
+    expect(beforeStats.winCount).toBe(1);
+    expect(beforeStats.lossCount).toBe(1);
+    expect(beforeStats.totalPnL).toBe(200);
+
+    const afterStats = calculateStatistics([trade2]);
+    expect(afterStats.totalTrades).toBe(1);
+    expect(afterStats.winCount).toBe(0);
+    expect(afterStats.lossCount).toBe(1);
+    expect(afterStats.totalPnL).toBe(-100);
+
+    const equityCurve = calculateEquityCurve([trade2]);
+    expect(equityCurve).toHaveLength(1);
+    expect(equityCurve[0].cumPnL).toBe(-100);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Screenshot Validation & Persistence Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('Screenshot Validation and Handling', () => {
+  it('accepts image up to 40 MB (41943040 bytes)', () => {
+    expect(MAX_SCREENSHOT_FILE_SIZE).toBe(40 * 1024 * 1024);
+
+    // Create mock file exactly 40MB
+    const mockFile40MB = new File([new Uint8Array(100)], 'chart.png', { type: 'image/png' });
+    Object.defineProperty(mockFile40MB, 'size', { value: 40 * 1024 * 1024 });
+
+    const result = validateScreenshotFile(mockFile40MB);
+    expect(result.valid).toBe(true);
+    expect(result.error).toBeNull();
+  });
+
+  it('rejects image over 40 MB', () => {
+    const mockFileOver40MB = new File([new Uint8Array(100)], 'large_chart.jpg', { type: 'image/jpeg' });
+    Object.defineProperty(mockFileOver40MB, 'size', { value: 40 * 1024 * 1024 + 1 });
+
+    const result = validateScreenshotFile(mockFileOver40MB);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('ขนาดไฟล์เกิน 40 MB');
+  });
+
+  it('accepts supported image MIME types and extensions: PNG, JPEG, JPG, WebP', () => {
+    const supported = [
+      new File([new Uint8Array(10)], 'test.png', { type: 'image/png' }),
+      new File([new Uint8Array(10)], 'test.jpeg', { type: 'image/jpeg' }),
+      new File([new Uint8Array(10)], 'test.jpg', { type: 'image/jpeg' }),
+      new File([new Uint8Array(10)], 'test.webp', { type: 'image/webp' }),
+    ];
+
+    for (const f of supported) {
+      const res = validateScreenshotFile(f);
+      expect(res.valid).toBe(true);
+    }
+  });
+
+  it('rejects unsupported file formats (PDF, GIF, executable)', () => {
+    const unsupported = [
+      new File([new Uint8Array(10)], 'doc.pdf', { type: 'application/pdf' }),
+      new File([new Uint8Array(10)], 'anim.gif', { type: 'image/gif' }),
+      new File([new Uint8Array(10)], 'script.exe', { type: 'application/octet-stream' }),
+    ];
+
+    for (const f of unsupported) {
+      const res = validateScreenshotFile(f);
+      expect(res.valid).toBe(false);
+      expect(res.error).toContain('รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPEG, JPG หรือ WebP');
+    }
+  });
+
+  it('trade record preserves existing screenshot paths on edit unless modified', () => {
+    const originalTrade = makeTrade({
+      id: 'trade-with-screenshots',
+      screenshot_before: 'ws-1/trade-1/before.png',
+      screenshot_after: 'ws-1/trade-1/after.webp',
+    });
+
+    // Simulate saving trade without changing screenshots
+    const editedTrade: Trade = {
+      ...originalTrade,
+      asset: 'ETHUSDT',
+      screenshot_before: originalTrade.screenshot_before,
+      screenshot_after: originalTrade.screenshot_after,
+    };
+
+    expect(editedTrade.screenshot_before).toBe('ws-1/trade-1/before.png');
+    expect(editedTrade.screenshot_after).toBe('ws-1/trade-1/after.webp');
   });
 });

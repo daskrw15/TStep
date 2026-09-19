@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../../db';
 import { useAuth } from '../../contexts/AuthContext';
 import { syncToCloud } from '../../services/sync';
-import { getScreenshotUrl } from '../../services/storage';
+import { getScreenshotUrl, deleteScreenshot } from '../../services/storage';
 import { calculatePnL, calculateRMultiple, formatCurrency, formatR } from '../../utils/trading';
 import { EMOTION_LABELS, STATUS_LABELS, RESULT_LABELS } from '../../locales/translations';
 import { format } from 'date-fns';
@@ -23,6 +23,7 @@ export default function TradeDetailPage() {
 
   const [beforeUrl, setBeforeUrl] = useState<string | null>(null);
   const [afterUrl, setAfterUrl] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
@@ -42,15 +43,27 @@ export default function TradeDetailPage() {
   const isOwner = trade.user_id === user?.id;
 
   const handleDelete = async () => {
-    if (!confirm('ยืนยันที่จะลบรายการเทรดนี้หรือไม่? (การกระทำนี้ไม่สามารถย้อนกลับได้)')) return;
     setDeleting(true);
-    await db.trades.update(trade.id, {
-      _sync_status: 'pending',
-      _deleted_at: new Date().toISOString(),
-      _updated_at: new Date().toISOString(),
-    });
-    syncToCloud().catch(() => {});
-    navigate('/trades');
+    try {
+      await db.trades.update(trade.id, {
+        _sync_status: 'pending',
+        _deleted_at: new Date().toISOString(),
+        _updated_at: new Date().toISOString(),
+      });
+      if (trade.screenshot_before) {
+        deleteScreenshot(trade.screenshot_before).catch(() => {});
+      }
+      if (trade.screenshot_after) {
+        deleteScreenshot(trade.screenshot_after).catch(() => {});
+      }
+      syncToCloud().catch(() => {});
+      setShowDeleteConfirm(false);
+      navigate('/trades');
+    } catch (err) {
+      console.error('Error deleting trade:', err);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -78,7 +91,7 @@ export default function TradeDetailPage() {
         {isOwner && (
           <div className="flex gap-2">
             <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/trades/${trade.id}/edit`)}>แก้ไข</button>
-            <button className="btn btn-danger btn-sm" onClick={handleDelete} disabled={deleting}>ลบ</button>
+            <button className="btn btn-danger btn-sm" onClick={() => setShowDeleteConfirm(true)} disabled={deleting}>ลบ</button>
           </div>
         )}
       </div>
@@ -221,6 +234,40 @@ export default function TradeDetailPage() {
                 <img src={afterUrl} alt="After trade" style={{ width: '100%', borderRadius: 'var(--radius-md)' }} />
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="modal-overlay" onClick={() => !deleting && setShowDeleteConfirm(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h2 className="modal-title text-negative">ยืนยันการลบรายการเทรด</h2>
+            <div style={{ marginBottom: 'var(--space-4)', lineHeight: '1.6', fontSize: 'var(--text-base)' }}>
+              คุณแน่ใจหรือไม่ว่าต้องการลบรายการเทรด <strong>{trade.asset}</strong> ({trade.direction.toUpperCase()})?
+              <div style={{ marginTop: '8px', color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
+                ⚠️ การลบนี้จะนำผลกำไร/ขาดทุนออกจากเงินทุนและสถิติต่างๆ และไม่สามารถย้อนกลับได้
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={deleting}
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={deleting}
+                onClick={handleDelete}
+              >
+                {deleting ? 'กำลังลบ…' : 'ยืนยันการลบ'}
+              </button>
+            </div>
           </div>
         </div>
       )}

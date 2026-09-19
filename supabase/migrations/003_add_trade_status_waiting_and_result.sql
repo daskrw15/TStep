@@ -15,4 +15,11 @@ BEGIN
   ) THEN
     ALTER TABLE trades ADD COLUMN result TEXT NOT NULL DEFAULT 'none' CHECK (result IN ('tp', 'sl', 'be', 'none'));
   END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'trades' AND column_name = 'pnl'
+  ) THEN
+    ALTER TABLE trades ADD COLUMN pnl NUMERIC;
+  END IF;
 END $$;

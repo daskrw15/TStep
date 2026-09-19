@@ -53,7 +53,7 @@ export async function exportAsCSV(workspaceId: string): Promise<string> {
   const headers = [
     'id', 'asset', 'market', 'direction', 'status', 'result', 'trade_date',
     'entry_price', 'exit_price', 'stop_loss', 'take_profit',
-    'position_size', 'leverage', 'fees', 'session',
+    'position_size', 'leverage', 'fees', 'pnl', 'session',
     'entry_reason', 'exit_reason', 'emotion', 'confidence',
     'followed_plan', 'review', 'visibility', 'created_at',
   ];

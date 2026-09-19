@@ -272,18 +272,18 @@ CREATE POLICY "Users can insert own profile"
 
 -- ─── 6. STORAGE: CONFIGURE BUCKET & VERIFY STORAGE POLICIES ─────────────────
 
--- Create private trade-screenshots bucket with size & mime-type constraints
+-- Create private trade-screenshots bucket with size & mime-type constraints (40 MB)
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
   'trade-screenshots',
   'trade-screenshots',
   false,
-  5242880, -- 5 MB (5 * 1024 * 1024)
+  41943040, -- 40 MB (40 * 1024 * 1024)
   ARRAY['image/png', 'image/jpeg', 'image/webp']
 )
 ON CONFLICT (id) DO UPDATE SET
   public = false,
-  file_size_limit = 5242880,
+  file_size_limit = 41943040,
   allowed_mime_types = ARRAY['image/png', 'image/jpeg', 'image/webp'];
 
 -- Storage Upload Policy: Members can only upload to their workspace path

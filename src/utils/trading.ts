@@ -23,6 +23,11 @@ import type { Trade, TradeStatistics, EquityPoint, CapitalSummary } from '../typ
  * Returns null if required fields are missing.
  */
 export function calculatePnL(trade: Trade): number | null {
+  // If authoritative realized P&L is recorded on the trade, use it directly
+  if (trade.pnl !== undefined && trade.pnl !== null) {
+    return Number(trade.pnl);
+  }
+
   const { entry_price, exit_price, position_size, direction, fees } = trade;
   if (entry_price == null || exit_price == null || position_size == null) {
     return null;

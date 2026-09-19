@@ -5,6 +5,7 @@ import { db, withSyncMeta } from '../../db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { syncToCloud } from '../../services/sync';
+import { deleteScreenshot } from '../../services/storage';
 import { calculatePnL, calculateRMultiple, formatCurrency, formatR } from '../../utils/trading';
 import { STATUS_LABELS, RESULT_LABELS, EMOTION_LABELS } from '../../locales/translations';
 import { format } from 'date-fns';
@@ -25,7 +26,12 @@ export default function TradesPage() {
   // Confirmation dialog state
   const [confirmTrade, setConfirmTrade] = useState<LocalTrade | null>(null);
   const [targetResult, setTargetResult] = useState<TradeResult | null>(null);
+  const [resultAmountInput, setResultAmountInput] = useState<string>('');
   const [savingResult, setSavingResult] = useState(false);
+
+  // Delete confirmation state
+  const [tradeToDelete, setTradeToDelete] = useState<LocalTrade | null>(null);
+  const [deletingTrade, setDeletingTrade] = useState(false);
 
   const allTrades = useLiveQuery<LocalTrade[]>(
     () => workspace
@@ -82,11 +88,33 @@ export default function TradesPage() {
     return result;
   }, [allTrades, search, dateFrom, dateTo, userFilter, resultFilter, user?.id]);
 
-  // Handle requesting result change (triggers confirmation popup)
+  // Handle requesting result change (triggers confirmation popup with prefilled amount)
   const handleRequestResult = (e: React.MouseEvent, trade: LocalTrade, res: TradeResult) => {
     e.stopPropagation();
     setConfirmTrade(trade);
     setTargetResult(res);
+
+    // If trade already has an authoritative pnl, prefill it
+    if (trade.pnl != null) {
+      setResultAmountInput(Math.abs(trade.pnl).toString());
+    } else {
+      // Calculate estimated P&L from entry/SL/TP if possible
+      let estimatedPnL: number | null = null;
+      if (trade.entry_price != null && trade.position_size != null) {
+        if (res === 'tp' && trade.take_profit != null) {
+          estimatedPnL = Math.abs((trade.take_profit - trade.entry_price) * trade.position_size) - (trade.fees ?? 0);
+        } else if (res === 'sl' && trade.stop_loss != null) {
+          estimatedPnL = Math.abs((trade.stop_loss - trade.entry_price) * trade.position_size) + (trade.fees ?? 0);
+        } else if (res === 'be') {
+          estimatedPnL = -(trade.fees ?? 0);
+        }
+      }
+      if (estimatedPnL != null && !isNaN(estimatedPnL)) {
+        setResultAmountInput(Math.abs(estimatedPnL).toString());
+      } else {
+        setResultAmountInput(res === 'be' ? '0' : '');
+      }
+    }
   };
 
   // Confirm saving result
@@ -106,11 +134,29 @@ export default function TradesPage() {
         }
       }
 
-      const updatedTrade = {
+      // Parse and normalize authoritative Realized P&L
+      let finalPnL: number | null = null;
+      const parsedAmount = parseFloat(resultAmountInput.trim());
+
+      if (!isNaN(parsedAmount)) {
+        if (targetResult === 'tp') {
+          finalPnL = Math.abs(parsedAmount);
+        } else if (targetResult === 'sl') {
+          finalPnL = -Math.abs(parsedAmount);
+        } else if (targetResult === 'be') {
+          // Allow 0 or user-entered net (including fees)
+          finalPnL = parsedAmount;
+        }
+      } else if (confirmTrade.pnl != null) {
+        finalPnL = confirmTrade.pnl;
+      }
+
+      const updatedTrade: LocalTrade = {
         ...confirmTrade,
         result: targetResult,
         status: targetResult !== 'none' ? ('closed' as const) : confirmTrade.status,
         exit_price: exitPrice,
+        pnl: finalPnL,
         updated_at: new Date().toISOString(),
       };
 
@@ -122,6 +168,37 @@ export default function TradesPage() {
       setSavingResult(false);
       setConfirmTrade(null);
       setTargetResult(null);
+      setResultAmountInput('');
+    }
+  };
+
+  // Confirm deleting trade
+  const handleConfirmDeleteTrade = async () => {
+    if (!tradeToDelete) return;
+    setDeletingTrade(true);
+
+    try {
+      await db.trades.update(tradeToDelete.id, {
+        _sync_status: 'pending',
+        _deleted_at: new Date().toISOString(),
+        _updated_at: new Date().toISOString(),
+      });
+
+      // Clean up Supabase Storage screenshots if present
+      if (tradeToDelete.screenshot_before) {
+        deleteScreenshot(tradeToDelete.screenshot_before).catch(() => {});
+      }
+      if (tradeToDelete.screenshot_after) {
+        deleteScreenshot(tradeToDelete.screenshot_after).catch(() => {});
+      }
+
+      // Background sync to remote
+      syncToCloud().catch(() => {});
+    } catch (err) {
+      console.error('Error deleting trade:', err);
+    } finally {
+      setDeletingTrade(false);
+      setTradeToDelete(null);
     }
   };
 
@@ -250,6 +327,19 @@ export default function TradesPage() {
                       >
                         ✏️ แก้ไข
                       </button>
+                      {trade.user_id === user?.id && (
+                        <button
+                          type="button"
+                          className="trade-result-btn text-negative"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setTradeToDelete(trade);
+                          }}
+                          title="ลบรายการเทรดนี้"
+                        >
+                          🗑️ ลบ
+                        </button>
+                      )}
                     </div>
 
                     <span style={{ fontWeight: 600, minWidth: '42px', textAlign: 'right' }}>
@@ -317,33 +407,99 @@ export default function TradesPage() {
       {confirmTrade && targetResult && (
         <div className="modal-overlay" onClick={() => !savingResult && setConfirmTrade(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <h2 className="modal-title">ยืนยันผลการเทรด</h2>
-            <div style={{ marginBottom: 'var(--space-6)', lineHeight: '1.6', fontSize: 'var(--text-base)' }}>
-              ต้องการบันทึกผลการเทรด <strong>{confirmTrade.asset}</strong> ({confirmTrade.direction.toUpperCase()}) เป็น{' '}
+            <h2 className="modal-title">บันทึกผลการเทรด (Trade Result)</h2>
+            <div style={{ marginBottom: 'var(--space-4)', lineHeight: '1.6', fontSize: 'var(--text-base)' }}>
+              บันทึกผลการเทรด <strong>{confirmTrade.asset}</strong> ({confirmTrade.direction.toUpperCase()}) เป็น{' '}
               <span className={`badge ${targetResult === 'tp' ? 'badge-positive' : targetResult === 'sl' ? 'badge-negative' : 'badge-neutral'}`} style={{ fontSize: 'var(--text-sm)' }}>
                 {RESULT_LABELS[targetResult]}
-              </span>{' '}
-              ใช่หรือไม่?
+              </span>
             </div>
+
+            <form
+              onSubmit={e => {
+                e.preventDefault();
+                handleConfirmSaveResult();
+              }}
+            >
+              <div className="form-group mb-4">
+                <label htmlFor="modalRealizedPnL">
+                  จำนวนเงินกำไร/ขาดทุนจริง (Realized P&L in USD)
+                </label>
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                  <span style={{ position: 'absolute', left: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>$</span>
+                  <input
+                    id="modalRealizedPnL"
+                    type="number"
+                    step="any"
+                    autoFocus
+                    required={targetResult !== 'be'}
+                    value={resultAmountInput}
+                    onChange={e => setResultAmountInput(e.target.value)}
+                    placeholder={targetResult === 'tp' ? 'เช่น 125.50' : targetResult === 'sl' ? 'เช่น 75.25' : '0.00 หรือค่าธรรมเนียม'}
+                    style={{ paddingLeft: '28px', fontSize: 'var(--text-lg)', fontWeight: 600 }}
+                  />
+                </div>
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '4px' }}>
+                  {targetResult === 'tp' && '💡 ระบบจะบันทึกเป็นยอดกำไรสุทธิ (+USD) เข้าเงินทุนอัตโนมัติ'}
+                  {targetResult === 'sl' && '💡 ระบบจะบันทึกเป็นยอดขาดทุนสุทธิ (-USD) หักจากเงินทุนอัตโนมัติ'}
+                  {targetResult === 'be' && '💡 ระบุ 0.00 หรือผลลัพธ์สุทธิหลังหักค่าธรรมเนียม'}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={savingResult}
+                  onClick={() => {
+                    setConfirmTrade(null);
+                    setTargetResult(null);
+                    setResultAmountInput('');
+                  }}
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={savingResult}
+                >
+                  {savingResult ? 'กำลังบันทึก…' : 'ยืนยัน'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Trade Confirmation Modal */}
+      {tradeToDelete && (
+        <div className="modal-overlay" onClick={() => !deletingTrade && setTradeToDelete(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h2 className="modal-title text-negative">ยืนยันการลบรายการเทรด</h2>
+            <div style={{ marginBottom: 'var(--space-4)', lineHeight: '1.6', fontSize: 'var(--text-base)' }}>
+              คุณแน่ใจหรือไม่ว่าต้องการลบรายการเทรด <strong>{tradeToDelete.asset}</strong> ({tradeToDelete.direction.toUpperCase()}) วันที่ {format(new Date(tradeToDelete.trade_date), 'MMM d, yyyy')}?
+              <div style={{ marginTop: '8px', color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
+                ⚠️ การลบนี้จะนำผลกำไร/ขาดทุนออกจากเงินทุนและสถิติต่างๆ และไม่สามารถย้อนกลับได้
+              </div>
+            </div>
+
             <div className="flex justify-end gap-3">
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={savingResult}
-                onClick={() => {
-                  setConfirmTrade(null);
-                  setTargetResult(null);
-                }}
+                disabled={deletingTrade}
+                onClick={() => setTradeToDelete(null)}
               >
                 ยกเลิก
               </button>
               <button
                 type="button"
-                className="btn btn-primary"
-                disabled={savingResult}
-                onClick={handleConfirmSaveResult}
+                className="btn btn-danger"
+                disabled={deletingTrade}
+                onClick={handleConfirmDeleteTrade}
               >
-                {savingResult ? 'กำลังบันทึก…' : 'ยืนยัน'}
+                {deletingTrade ? 'กำลังลบ…' : 'ยืนยันการลบ'}
               </button>
             </div>
           </div>

@@ -89,6 +89,7 @@ export interface Trade {
   position_size: number | null;
   leverage: number | null;
   fees: number | null;
+  pnl?: number | null; // Authoritative realized P&L amount (e.g. entered via quick action or edit)
   session: string | null;
   entry_reason: string | null;
   exit_reason: string | null;
