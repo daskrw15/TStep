@@ -1,0 +1,433 @@
+import { useMemo, useState, useEffect } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { useNavigate } from 'react-router-dom';
+import { db } from '../../db';
+import { useAuth } from '../../contexts/AuthContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
+import { calculatePnL, calculateRMultiple, calculateStatistics, calculateEquityCurve, calculateCapitalSummary, formatCurrency, formatR } from '../../utils/trading';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { format, startOfMonth, endOfMonth } from 'date-fns';
+import type { LocalTrade } from '../../types';
+
+export default function DashboardPage() {
+  const { user, profile } = useAuth();
+  const { workspace, members, partner } = useWorkspace();
+  const navigate = useNavigate();
+  const currency = profile?.preferred_currency ?? 'THB';
+
+  // FX state (THB to USD)
+  const [usdRate, setUsdRate] = useState<number | null>(null); // rate for 1 THB in USD (e.g. 0.028)
+
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchRate() {
+      try {
+        // Free, highly-available exchange rate API
+        const res = await fetch('https://open.er-api.com/v6/latest/THB');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.rates && data.rates.USD && isMounted) {
+            setUsdRate(data.rates.USD);
+          }
+        }
+      } catch {
+        // Gracefully fail back without breaking dashboard
+        if (isMounted) setUsdRate(null);
+      }
+    }
+    fetchRate();
+    return () => { isMounted = false; };
+  }, []);
+
+  const trades = useLiveQuery<LocalTrade[]>(
+    () => workspace
+      ? db.trades.where('workspace_id').equals(workspace.id).filter(t => !t._deleted_at).toArray()
+      : [],
+    [workspace?.id]
+  );
+
+  const now = new Date();
+  const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+  const monthEnd = format(endOfMonth(now), 'yyyy-MM-dd');
+
+  const monthlyTrades = useMemo(() =>
+    (trades ?? []).filter(t => t.trade_date >= monthStart && t.trade_date <= monthEnd),
+    [trades, monthStart, monthEnd]
+  );
+
+  const myMonthly = useMemo(() =>
+    monthlyTrades.filter(t => t.user_id === user?.id),
+    [monthlyTrades, user?.id]
+  );
+
+  const partnerMonthly = useMemo(() =>
+    monthlyTrades.filter(t => t.user_id !== user?.id),
+    [monthlyTrades, user?.id]
+  );
+
+  const myMonthlyStats = useMemo(() => calculateStatistics(myMonthly), [myMonthly]);
+  const partnerMonthlyStats = useMemo(() => calculateStatistics(partnerMonthly), [partnerMonthly]);
+  const combinedMonthlyStats = useMemo(() => calculateStatistics(monthlyTrades), [monthlyTrades]);
+
+  // Overall workspace performance stats
+  const overallStats = useMemo(() => calculateStatistics(trades ?? []), [trades]);
+
+  const partnerName = partner?.profile?.display_name || 'คู่เทรด';
+
+  // Capital calculations via centralized source of truth
+  const myMem = members.find(m => m.user_id === user?.id);
+  const pMem = members.find(m => m.user_id !== user?.id);
+
+  const initialUserCap = workspace?.user_capital != null
+    ? Number(workspace.user_capital)
+    : Number(myMem?.capital ?? 0);
+
+  const initialPartnerCap = workspace?.partner_capital != null
+    ? Number(workspace.partner_capital)
+    : Number(pMem?.capital ?? 0);
+
+  const capitalSummary = useMemo(() => {
+    return calculateCapitalSummary({
+      initialUserCapital: initialUserCap,
+      initialPartnerCapital: initialPartnerCap,
+      trades: trades ?? [],
+      userId: user?.id,
+    });
+  }, [initialUserCap, initialPartnerCap, trades, user?.id]);
+
+  const equityCurve = useMemo(() => {
+    return calculateEquityCurve(trades ?? [], capitalSummary.initialTotalCapital);
+  }, [trades, capitalSummary.initialTotalCapital]);
+
+  const recentTrades = useMemo(() =>
+    [...(trades ?? [])]
+      .sort((a, b) => b.trade_date.localeCompare(a.trade_date))
+      .slice(0, 5),
+    [trades]
+  );
+
+  if (!trades) return <div className="loading-page"><div className="loading-spinner" /></div>;
+
+  const formatUsd = (thb: number) => {
+    if (usdRate == null) return null;
+    const usd = thb * usdRate;
+    return `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  };
+
+  const largerOwner = capitalSummary.currentTotalCapital > 0
+    ? (capitalSummary.currentUserCapital > capitalSummary.currentPartnerCapital
+        ? 'คุณ'
+        : capitalSummary.currentPartnerCapital > capitalSummary.currentUserCapital
+        ? partnerName
+        : 'เท่ากันทั้งสองคน')
+    : '—';
+
+  return (
+    <div>
+      <div className="page-header flex justify-between items-center">
+        <div>
+          <h1 className="page-title">ภาพรวม</h1>
+          <p className="page-subtitle">{format(now, 'MMMM yyyy')}</p>
+        </div>
+        <button className="btn btn-primary btn-sm" onClick={() => navigate('/trades/new')}>
+          ＋ เพิ่มรายการเทรด
+        </button>
+      </div>
+
+      {/* Monthly Summary Cards - Always visible */}
+      <div className="grid-3 mb-6">
+        <div className="card">
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
+            คุณ (เดือนนี้)
+          </div>
+          <div className={`pnl-value ${myMonthlyStats.totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-2)' }}>
+            {formatCurrency(myMonthlyStats.totalPnL, currency)}
+          </div>
+          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+            {myMonthlyStats.totalTrades} รายการ · Win Rate {(myMonthlyStats.winRate * 100).toFixed(0)}%
+          </div>
+        </div>
+
+        <div className="card">
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
+            {partnerName} (เดือนนี้)
+          </div>
+          <div className={`pnl-value ${partnerMonthlyStats.totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-2)' }}>
+            {formatCurrency(partnerMonthlyStats.totalPnL, currency)}
+          </div>
+          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+            {partnerMonthlyStats.totalTrades} รายการ · Win Rate {(partnerMonthlyStats.winRate * 100).toFixed(0)}%
+          </div>
+        </div>
+
+        <div className="card">
+          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-3)' }}>
+            รวมทั้งคู่ (เดือนนี้)
+          </div>
+          <div className={`pnl-value ${combinedMonthlyStats.totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontSize: 'var(--text-xl)', marginBottom: 'var(--space-2)' }}>
+            {formatCurrency(combinedMonthlyStats.totalPnL, currency)}
+          </div>
+          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+            รวมทั้งหมด {combinedMonthlyStats.totalTrades} รายการ
+          </div>
+        </div>
+      </div>
+
+      {/* Capital & Ownership Section - Always visible */}
+      <div className="card mb-6">
+        <div className="flex justify-between items-center mb-2">
+          <div>
+            <div style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>💰 เงินทุนและสัดส่วนการถือครอง (Capital & Ownership)</div>
+            <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '2px' }}>
+              คำนวณจาก: เงินทุนเริ่มต้น + กำไร/ขาดทุนสะสม (Realized P&L)
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => navigate('/settings')}
+          >
+            ⚙️ ตั้งค่าเงินทุนเริ่มต้น
+          </button>
+        </div>
+
+        <div>
+          {/* Total summary row */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', marginTop: 'var(--space-3)' }}>
+            <div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>เงินทุนปัจจุบัน (Current Capital)</div>
+              <span style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--color-text-primary)' }}>
+                ฿{capitalSummary.currentTotalCapital.toLocaleString()}
+              </span>
+            </div>
+            {usdRate != null && (
+              <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', alignSelf: 'flex-end', marginBottom: '2px' }}>
+                ≈ {formatUsd(capitalSummary.currentTotalCapital)} <span style={{ fontSize: '10px' }}>(อัตราแลกเปลี่ยนจริง)</span>
+              </span>
+            )}
+            <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                เงินทุนเริ่มต้น ฿{capitalSummary.initialTotalCapital.toLocaleString()} · P&L สะสม
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
+                <span className={`pnl-value ${capitalSummary.totalRealizedPnL >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontWeight: 700, fontSize: 'var(--text-base)' }}>
+                  {formatCurrency(capitalSummary.totalRealizedPnL, currency)}
+                </span>
+                {largerOwner !== '—' && (
+                  <span className="badge badge-neutral" style={{ fontSize: '11px' }}>
+                    👑 ส่วนใหญ่: {largerOwner}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Percentage bar (Current Capital Share) */}
+          <div className="capital-bar-container">
+            <div
+              className="capital-bar-my"
+              style={{ width: `${capitalSummary.currentTotalCapital > 0 ? capitalSummary.currentUserCapitalShare : 50}%` }}
+              title={`คุณ: ${capitalSummary.currentUserCapitalShare.toFixed(1)}%`}
+            />
+            <div
+              className="capital-bar-partner"
+              style={{ width: `${capitalSummary.currentTotalCapital > 0 ? capitalSummary.currentPartnerCapitalShare : 50}%` }}
+              title={`${partnerName}: ${capitalSummary.currentPartnerCapitalShare.toFixed(1)}%`}
+            />
+          </div>
+
+          {/* Member breakdown */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-4)' }}>
+            <div className="capital-member-row" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+              <div>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--color-accent)' }} />
+                  คุณ
+                </div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
+                  ฿{capitalSummary.currentUserCapital.toLocaleString()}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                  เริ่มต้น ฿{capitalSummary.initialUserCapital.toLocaleString()} ({capitalSummary.initialUserOwnershipPct.toFixed(1)}%)
+                  {capitalSummary.userRealizedPnL !== 0 && (
+                    <span className={capitalSummary.userRealizedPnL >= 0 ? ' pnl-positive' : ' pnl-negative'}>
+                      {' '}({capitalSummary.userRealizedPnL >= 0 ? '+' : ''}฿{capitalSummary.userRealizedPnL.toLocaleString()})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: 'var(--color-accent)' }}>
+                  {capitalSummary.currentTotalCapital > 0 ? `${capitalSummary.currentUserCapitalShare.toFixed(1)}%` : '0%'}
+                </div>
+                <div className="text-muted" style={{ fontSize: '11px' }}>สัดส่วนปัจจุบัน</div>
+              </div>
+            </div>
+
+            <div className="capital-member-row" style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+              <div>
+                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#a855f7' }} />
+                  {partnerName}
+                </div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
+                  ฿{capitalSummary.currentPartnerCapital.toLocaleString()}
+                </div>
+                <div style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                  เริ่มต้น ฿{capitalSummary.initialPartnerCapital.toLocaleString()} ({capitalSummary.initialPartnerOwnershipPct.toFixed(1)}%)
+                  {capitalSummary.partnerRealizedPnL !== 0 && (
+                    <span className={capitalSummary.partnerRealizedPnL >= 0 ? ' pnl-positive' : ' pnl-negative'}>
+                      {' '}({capitalSummary.partnerRealizedPnL >= 0 ? '+' : ''}฿{capitalSummary.partnerRealizedPnL.toLocaleString()})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: '#a855f7' }}>
+                  {capitalSummary.currentTotalCapital > 0 ? `${capitalSummary.currentPartnerCapitalShare.toFixed(1)}%` : '0%'}
+                </div>
+                <div className="text-muted" style={{ fontSize: '11px' }}>สัดส่วนปัจจุบัน</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Trading Performance & History */}
+      {trades.length === 0 ? (
+        <div className="card mb-6" style={{ textAlign: 'center', padding: 'var(--space-8) var(--space-4)' }}>
+          <div style={{ fontSize: '32px', marginBottom: 'var(--space-2)' }}>📊</div>
+          <div style={{ fontSize: 'var(--text-base)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
+            ยังไม่มีข้อมูลรายการเทรด
+          </div>
+          <div className="text-muted" style={{ fontSize: 'var(--text-sm)', marginBottom: 'var(--space-4)' }}>
+            สถิติการเทรดและ Equity Curve จะปรากฏที่นี่เมื่อคุณเริ่มบันทึกรายการแรก
+          </div>
+          <button className="btn btn-primary" onClick={() => navigate('/trades/new')}>
+            ＋ บันทึกรายการเทรดแรก
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Key Trading Statistics Summary */}
+          <div className="card mb-6">
+            <div className="flex justify-between items-center mb-4">
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>📊 สถิติการเทรดภาพรวม (Overall Performance)</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/statistics')}>ดูสถิติละเอียด →</button>
+            </div>
+            <div className="grid-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 'var(--space-3)' }}>
+              <div style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>Win Rate</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
+                  {(overallStats.winRate * 100).toFixed(1)}%
+                </div>
+                <div className="text-muted" style={{ fontSize: '10px' }}>
+                  ชนะ {overallStats.winCount} / แพ้ {overallStats.lossCount} {overallStats.breakEvenCount > 0 ? `/ BE ${overallStats.breakEvenCount}` : ''}
+                </div>
+              </div>
+
+              <div style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>Profit Factor</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
+                  {overallStats.profitFactor === Infinity ? '∞' : overallStats.profitFactor.toFixed(2)}
+                </div>
+                <div className="text-muted" style={{ fontSize: '10px' }}>
+                  Avg Win {formatCurrency(overallStats.averageWin, currency)}
+                </div>
+              </div>
+
+              <div style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>Avg R-Multiple</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
+                  {overallStats.averageR != null ? overallStats.averageR.toFixed(2) + 'R' : '—'}
+                </div>
+                <div className="text-muted" style={{ fontSize: '10px' }}>
+                  Expectancy {formatCurrency(overallStats.expectancy, currency)}
+                </div>
+              </div>
+
+              <div style={{ background: 'rgba(255,255,255,0.02)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>Max Drawdown</div>
+                <div className="pnl-negative" style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
+                  {formatCurrency(-overallStats.maxDrawdown, currency)}
+                </div>
+                <div className="text-muted" style={{ fontSize: '10px' }}>
+                  ทั้งหมด {overallStats.totalTrades} ไม้
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Equity Curve */}
+          {equityCurve.length > 0 && (
+            <div className="card mb-6">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>📈 กราฟการเติบโตของพอร์ต (Equity Curve)</div>
+                  <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '2px' }}>
+                    เริ่มต้น ฿{capitalSummary.initialTotalCapital.toLocaleString()} → ปัจจุบัน ฿{capitalSummary.currentTotalCapital.toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={equityCurve}>
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#6b7185' }} />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: '#6b7185' }}
+                    domain={['auto', 'auto']}
+                    tickFormatter={(val) => `฿${Number(val).toLocaleString()}`}
+                  />
+                  <Tooltip
+                    contentStyle={{ background: '#1e2130', border: '1px solid #2e3145', borderRadius: 8, fontSize: 12 }}
+                    labelStyle={{ color: '#9ba1b0' }}
+                    formatter={(val) => [`฿${Number(val).toLocaleString()}`, 'มูลค่าพอร์ต (Equity)']}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="equity"
+                    stroke="#6c8cff"
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#6c8cff' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Recent Trades */}
+          <div className="card">
+            <div className="flex justify-between items-center mb-4">
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>รายการเทรดล่าสุด</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/trades')}>ดูทั้งหมด</button>
+            </div>
+            {recentTrades.map(trade => {
+              const pnl = calculatePnL(trade);
+              const r = calculateRMultiple(trade);
+              return (
+                <div key={trade.id} className="trade-row" onClick={() => navigate(`/trades/${trade.id}/edit`)}>
+                  <span className="trade-row-date">{format(new Date(trade.trade_date), 'MMM d')}</span>
+                  <span className="trade-row-asset">{trade.asset}</span>
+                  <span className={`badge ${trade.direction === 'long' ? 'badge-long' : 'badge-short'}`}>
+                    {trade.direction.toUpperCase()}
+                  </span>
+                  <span className={`badge ${trade.status === 'closed' ? 'badge-neutral' : trade.status === 'waiting' ? 'badge-neutral' : 'badge-sync'}`}>
+                    {trade.status === 'waiting' ? 'กำลังรอ' : trade.status === 'open' ? 'เปิดอยู่' : 'ปิดแล้ว'}
+                  </span>
+                  {trade.result && trade.result !== 'none' && (
+                    <span className={`badge ${trade.result === 'tp' ? 'badge-positive' : trade.result === 'sl' ? 'badge-negative' : 'badge-neutral'}`}>
+                      {trade.result.toUpperCase()}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 'var(--text-sm)' }}>{formatR(r)}</span>
+                  <span className={`pnl-value ${(pnl ?? 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontSize: 'var(--text-sm)', textAlign: 'right' }}>
+                    {pnl != null ? formatCurrency(pnl, currency) : '—'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

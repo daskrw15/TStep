@@ -1,0 +1,598 @@
+import { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db, withSyncMeta } from '../../db';
+import { useAuth } from '../../contexts/AuthContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
+import { syncToCloud } from '../../services/sync';
+import { uploadScreenshot, getScreenshotUrl } from '../../services/storage';
+import type { Direction, TradeStatus, TradeResult, Visibility, Emotion, Trade, LocalStrategy } from '../../types';
+import { EMOTIONS } from '../../types';
+import { EMOTION_LABELS, STATUS_LABELS, RESULT_LABELS } from '../../locales/translations';
+import { calculateAutoSlTp } from '../../utils/trading';
+import { format } from 'date-fns';
+
+export default function AddTradePage() {
+  const { user } = useAuth();
+  const { workspace } = useWorkspace();
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const isEdit = !!id;
+
+  const existingTrade = useLiveQuery(
+    () => id ? db.trades.get(id) : undefined,
+    [id]
+  );
+
+  const strategies = useLiveQuery<LocalStrategy[]>(
+    () => workspace
+      ? db.strategies.where('workspace_id').equals(workspace.id).filter(s => !s._deleted_at).toArray()
+      : [],
+    [workspace?.id]
+  );
+
+  // Query most recent saved trade for current user to allow duplicating setup
+  const latestTrade = useLiveQuery<Trade | undefined>(
+    async () => {
+      if (isEdit || !workspace || !user) return undefined;
+      const userTrades = await db.trades
+        .where('workspace_id')
+        .equals(workspace.id)
+        .filter(t => !t._deleted_at && t.user_id === user.id)
+        .toArray();
+      if (userTrades.length === 0) return undefined;
+      userTrades.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return userTrades[0];
+    },
+    [isEdit, workspace?.id, user?.id]
+  );
+
+  // Form state
+  const [asset, setAsset] = useState('');
+  const [market, setMarket] = useState('');
+  const [direction, setDirection] = useState<Direction>('long');
+  const [status, setStatus] = useState<TradeStatus>('closed');
+  const [result, setResult] = useState<TradeResult>('none');
+  const [tradeDate, setTradeDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [strategyId, setStrategyId] = useState('');
+  const [entryPrice, setEntryPrice] = useState('');
+  const [exitPrice, setExitPrice] = useState('');
+  const [stopLoss, setStopLoss] = useState('');
+  const [takeProfit, setTakeProfit] = useState('');
+  const [positionSize, setPositionSize] = useState('');
+  const [leverage, setLeverage] = useState('');
+  const [fees, setFees] = useState('');
+  const [session, setSession] = useState('');
+  const [entryReason, setEntryReason] = useState('');
+  const [exitReason, setExitReason] = useState('');
+  const [emotion, setEmotion] = useState<Emotion | ''>('');
+  const [confidence, setConfidence] = useState(5);
+  const [followedPlan, setFollowedPlan] = useState<boolean | null>(null);
+  const [review, setReview] = useState('');
+  const [visibility, setVisibility] = useState<Visibility>('shared');
+  const [screenshotBefore, setScreenshotBefore] = useState<File | null>(null);
+  const [screenshotAfter, setScreenshotAfter] = useState<File | null>(null);
+  const [existingBeforePath, setExistingBeforePath] = useState<string | null>(null);
+  const [existingAfterPath, setExistingAfterPath] = useState<string | null>(null);
+  const [previewBeforeUrl, setPreviewBeforeUrl] = useState<string | null>(null);
+  const [previewAfterUrl, setPreviewAfterUrl] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  // Flags to track if SL/TP were manually edited by user
+  const [isSlManuallyEdited, setIsSlManuallyEdited] = useState(false);
+  const [isTpManuallyEdited, setIsTpManuallyEdited] = useState(false);
+
+  // Populate form for edit mode
+  useEffect(() => {
+    if (existingTrade) {
+      setAsset(existingTrade.asset);
+      setMarket(existingTrade.market ?? '');
+      setDirection(existingTrade.direction);
+      setStatus(existingTrade.status);
+      setResult(existingTrade.result ?? 'none');
+      setTradeDate(existingTrade.trade_date);
+      setStrategyId(existingTrade.strategy_id ?? '');
+      setEntryPrice(existingTrade.entry_price?.toString() ?? '');
+      setExitPrice(existingTrade.exit_price?.toString() ?? '');
+      setStopLoss(existingTrade.stop_loss?.toString() ?? '');
+      setTakeProfit(existingTrade.take_profit?.toString() ?? '');
+      setPositionSize(existingTrade.position_size?.toString() ?? '');
+      setLeverage(existingTrade.leverage?.toString() ?? '');
+      setFees(existingTrade.fees?.toString() ?? '');
+      setSession(existingTrade.session ?? '');
+      setEntryReason(existingTrade.entry_reason ?? '');
+      setExitReason(existingTrade.exit_reason ?? '');
+      setEmotion(existingTrade.emotion ?? '');
+      setConfidence(existingTrade.confidence ?? 5);
+      setFollowedPlan(existingTrade.followed_plan);
+      setReview(existingTrade.review ?? '');
+      setVisibility(existingTrade.visibility);
+      // In edit mode, existing SL/TP should be preserved
+      if (existingTrade.stop_loss != null) setIsSlManuallyEdited(true);
+      if (existingTrade.take_profit != null) setIsTpManuallyEdited(true);
+
+      // Existing screenshots
+      if (existingTrade.screenshot_before) {
+        setExistingBeforePath(existingTrade.screenshot_before);
+        getScreenshotUrl(existingTrade.screenshot_before).then(url => {
+          if (url) setPreviewBeforeUrl(url);
+        });
+      }
+      if (existingTrade.screenshot_after) {
+        setExistingAfterPath(existingTrade.screenshot_after);
+        getScreenshotUrl(existingTrade.screenshot_after).then(url => {
+          if (url) setPreviewAfterUrl(url);
+        });
+      }
+    }
+  }, [existingTrade]);
+
+  // Handler for duplicating latest trade
+  const handleDuplicateLatest = () => {
+    if (!latestTrade) return;
+    setAsset(latestTrade.asset);
+    setMarket(latestTrade.market ?? '');
+    setDirection(latestTrade.direction);
+    setStrategyId(latestTrade.strategy_id ?? '');
+    setPositionSize(latestTrade.position_size?.toString() ?? '');
+    setLeverage(latestTrade.leverage?.toString() ?? '');
+    setFees(latestTrade.fees?.toString() ?? '');
+    setSession(latestTrade.session ?? '');
+    setEntryReason(latestTrade.entry_reason ?? '');
+    setExitReason(latestTrade.exit_reason ?? '');
+    setEmotion(latestTrade.emotion ?? '');
+    setConfidence(latestTrade.confidence ?? 5);
+    setFollowedPlan(latestTrade.followed_plan);
+    setReview(latestTrade.review ?? '');
+    setVisibility(latestTrade.visibility);
+  };
+
+  // Helper to recompute auto SL/TP
+  const applyAutoSlTp = (entryVal: string, dir: Direction) => {
+    const num = Number(entryVal);
+    if (!entryVal.trim() || isNaN(num) || num <= 0) {
+      if (!isSlManuallyEdited) setStopLoss('');
+      if (!isTpManuallyEdited) setTakeProfit('');
+      return;
+    }
+    const auto = calculateAutoSlTp(num, dir, 500);
+    if (!isSlManuallyEdited) {
+      setStopLoss(auto.stopLoss.toString());
+    }
+    if (!isTpManuallyEdited) {
+      setTakeProfit(auto.takeProfit.toString());
+    }
+  };
+
+  const handleEntryPriceChange = (val: string) => {
+    setEntryPrice(val);
+    applyAutoSlTp(val, direction);
+  };
+
+  const handleDirectionChange = (newDir: Direction) => {
+    setDirection(newDir);
+    applyAutoSlTp(entryPrice, newDir);
+  };
+
+  const parseNum = (v: string) => v.trim() ? Number(v) : null;
+
+  const handleSelectBeforeFile = (file: File | null) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setError('ขนาดไฟล์เกิน 5 MB กรุณาเลือกไฟล์ใหม่');
+      return;
+    }
+    setError('');
+    setScreenshotBefore(file);
+    setPreviewBeforeUrl(URL.createObjectURL(file));
+  };
+
+  const handleSelectAfterFile = (file: File | null) => {
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setError('ขนาดไฟล์เกิน 5 MB กรุณาเลือกไฟล์ใหม่');
+      return;
+    }
+    setError('');
+    setScreenshotAfter(file);
+    setPreviewAfterUrl(URL.createObjectURL(file));
+  };
+
+  const handleRemoveBeforeScreenshot = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setScreenshotBefore(null);
+    setExistingBeforePath(null);
+    setPreviewBeforeUrl(null);
+  };
+
+  const handleRemoveAfterScreenshot = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setScreenshotAfter(null);
+    setExistingAfterPath(null);
+    setPreviewAfterUrl(null);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (!asset.trim()) {
+      setError('กรุณาระบุชื่อสินทรัพย์ (Asset)');
+      return;
+    }
+    if (!workspace || !user) {
+      setError('ไม่พบพื้นที่เทรดหรือข้อมูลผู้ใช้');
+      return;
+    }
+
+    setSaving(true);
+
+    const tradeId = isEdit ? id! : crypto.randomUUID();
+
+    // Upload screenshots if provided
+    let screenshotBeforePath = existingBeforePath;
+    let screenshotAfterPath = existingAfterPath;
+
+    if (screenshotBefore) {
+      const res = await uploadScreenshot(screenshotBefore, workspace.id, tradeId, 'before');
+      if (res.error) {
+        setError(`อัปโหลดภาพก่อนเข้าไม่สำเร็จ: ${res.error}`);
+        setSaving(false);
+        return;
+      }
+      screenshotBeforePath = res.path;
+    }
+    if (screenshotAfter) {
+      const res = await uploadScreenshot(screenshotAfter, workspace.id, tradeId, 'after');
+      if (res.error) {
+        setError(`อัปโหลดภาพหลังปิดไม่สำเร็จ: ${res.error}`);
+        setSaving(false);
+        return;
+      }
+      screenshotAfterPath = res.path;
+    }
+
+    const now = new Date().toISOString();
+    const tradeData: Trade = {
+      id: tradeId,
+      workspace_id: workspace.id,
+      user_id: existingTrade?.user_id ?? user.id,
+      asset: asset.trim().toUpperCase(),
+      market: market.trim() || null,
+      direction,
+      status,
+      result,
+      trade_date: tradeDate,
+      strategy_id: strategyId || null,
+      entry_price: parseNum(entryPrice),
+      exit_price: parseNum(exitPrice),
+      stop_loss: parseNum(stopLoss),
+      take_profit: parseNum(takeProfit),
+      position_size: parseNum(positionSize),
+      leverage: parseNum(leverage),
+      fees: parseNum(fees),
+      session: session.trim() || null,
+      entry_reason: entryReason.trim() || null,
+      exit_reason: exitReason.trim() || null,
+      emotion: (emotion as Emotion) || null,
+      confidence,
+      followed_plan: followedPlan,
+      review: review.trim() || null,
+      screenshot_before: screenshotBeforePath,
+      screenshot_after: screenshotAfterPath,
+      visibility,
+      created_at: existingTrade?.created_at ?? now,
+      updated_at: now,
+    };
+
+    await db.trades.put(withSyncMeta(tradeData, 'pending'));
+
+    // Attempt sync
+    syncToCloud().catch(() => {});
+
+    setSaving(false);
+    navigate('/trades');
+  };
+
+  return (
+    <div>
+      <div className="page-header flex justify-between items-center">
+        <h1 className="page-title">{isEdit ? 'แก้ไขรายการเทรด' : 'เพิ่มรายการเทรด'}</h1>
+        {!isEdit && latestTrade && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleDuplicateLatest}
+            title="นำค่าตั้งต้นจากรายการล่าสุดของคุณมาใช้"
+          >
+            📋 ใช้รายการล่าสุด
+          </button>
+        )}
+      </div>
+
+      {error && <div className="auth-error mb-4">{error}</div>}
+
+      <form onSubmit={handleSubmit}>
+        {/* Basic */}
+        <div className="form-section">
+          <div className="form-section-title">ข้อมูลพื้นฐาน (Basic)</div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="asset">สินทรัพย์ (Asset) *</label>
+              <input id="asset" value={asset} onChange={e => setAsset(e.target.value)} placeholder="เช่น BTCUSDT, XAUUSD" required />
+            </div>
+            <div className="form-group">
+              <label htmlFor="market">ตลาด (Market)</label>
+              <input id="market" value={market} onChange={e => setMarket(e.target.value)} placeholder="เช่น Crypto, Forex, หุ้นไทย" />
+            </div>
+          </div>
+          <div className="form-group">
+            <label>ทิศทาง (Direction)</label>
+            <div className="direction-toggle">
+              <button type="button" className={direction === 'long' ? 'active-long' : ''} onClick={() => handleDirectionChange('long')}>Long</button>
+              <button type="button" className={direction === 'short' ? 'active-short' : ''} onClick={() => handleDirectionChange('short')}>Short</button>
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="tradeDate">วันที่</label>
+              <input id="tradeDate" type="date" value={tradeDate} onChange={e => setTradeDate(e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label htmlFor="status">สถานะ (Status)</label>
+              <select id="status" value={status} onChange={e => setStatus(e.target.value as TradeStatus)}>
+                <option value="waiting">{STATUS_LABELS.waiting}</option>
+                <option value="open">{STATUS_LABELS.open}</option>
+                <option value="closed">{STATUS_LABELS.closed}</option>
+              </select>
+            </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="result">ผลลัพธ์การเทรด (Trade Result)</label>
+            <select id="result" value={result} onChange={e => setResult(e.target.value as TradeResult)}>
+              <option value="none">{RESULT_LABELS.none}</option>
+              <option value="tp">TP (Take Profit)</option>
+              <option value="sl">SL (Stop Loss)</option>
+              <option value="be">BE (Break-Even เสมอตัว)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Trade */}
+        <div className="form-section">
+          <div className="form-section-title">การตั้งราคาและขนาด (Trade)</div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="entryPrice">ราคาเข้า (Entry Price)</label>
+              <input
+                id="entryPrice"
+                type="number"
+                step="any"
+                value={entryPrice}
+                onChange={e => handleEntryPriceChange(e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="exitPrice">ราคาออก (Exit Price)</label>
+              <input id="exitPrice" type="number" step="any" value={exitPrice} onChange={e => setExitPrice(e.target.value)} placeholder="0.00" />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="stopLoss">
+                Stop Loss {!isSlManuallyEdited && entryPrice && <span className="text-muted" style={{ fontSize: '0.75rem' }}>(คำนวณอัตโนมัติ 500 จุด)</span>}
+              </label>
+              <input
+                id="stopLoss"
+                type="number"
+                step="any"
+                value={stopLoss}
+                onChange={e => {
+                  setStopLoss(e.target.value);
+                  setIsSlManuallyEdited(true);
+                }}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="takeProfit">
+                Take Profit {!isTpManuallyEdited && entryPrice && <span className="text-muted" style={{ fontSize: '0.75rem' }}>(คำนวณอัตโนมัติ 500 จุด)</span>}
+              </label>
+              <input
+                id="takeProfit"
+                type="number"
+                step="any"
+                value={takeProfit}
+                onChange={e => {
+                  setTakeProfit(e.target.value);
+                  setIsTpManuallyEdited(true);
+                }}
+                placeholder="0.00"
+              />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="positionSize">ขนาดสถานะ (Position Size)</label>
+              <input id="positionSize" type="number" step="any" value={positionSize} onChange={e => setPositionSize(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="form-group">
+              <label htmlFor="leverage">Leverage</label>
+              <input id="leverage" type="number" step="any" value={leverage} onChange={e => setLeverage(e.target.value)} placeholder="เช่น 1, 10, 50, 100" />
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="fees">ค่าธรรมเนียม (Fees)</label>
+              <input id="fees" type="number" step="any" value={fees} onChange={e => setFees(e.target.value)} placeholder="0.00" />
+            </div>
+            <div className="form-group">
+              <label htmlFor="session">ช่วงเวลาเทรด (Session)</label>
+              <input id="session" type="text" value={session} onChange={e => setSession(e.target.value)} placeholder="เช่น London, New York, Asia" />
+            </div>
+          </div>
+        </div>
+
+        {/* Strategy */}
+        <div className="form-section">
+          <div className="form-section-title">กลยุทธ์ (Strategy)</div>
+          <div className="form-group">
+            <label htmlFor="strategy">เลือกกลยุทธ์</label>
+            <select id="strategy" value={strategyId} onChange={e => setStrategyId(e.target.value)}>
+              <option value="">— ไม่ระบุ —</option>
+              {(strategies ?? []).map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Reason */}
+        <div className="form-section">
+          <div className="form-section-title">เหตุผลในการเทรด (Reason)</div>
+          <div className="form-group">
+            <label htmlFor="entryReason">เหตุผลในการเข้าสถานะ (Entry Reason)</label>
+            <textarea id="entryReason" value={entryReason} onChange={e => setEntryReason(e.target.value)} placeholder="ระบุสัญญาณ เหตุผล หรือ setup ในการเข้า…" />
+          </div>
+          <div className="form-group">
+            <label htmlFor="exitReason">เหตุผลในการออกสถานะ (Exit Reason)</label>
+            <textarea id="exitReason" value={exitReason} onChange={e => setExitReason(e.target.value)} placeholder="ระบุเหตุผลในการปิดสถานะ เช่น ชน TP, ชน SL หรือปิดตามสัญญาณ…" />
+          </div>
+        </div>
+
+        {/* Psychology */}
+        <div className="form-section">
+          <div className="form-section-title">จิตวิทยาและสภาวะอารมณ์ (Psychology)</div>
+          <div className="form-group">
+            <label>สภาวะอารมณ์ขณะเทรด</label>
+            <div className="emotion-grid">
+              {EMOTIONS.map(em => (
+                <button
+                  key={em}
+                  type="button"
+                  className={`emotion-chip ${emotion === em ? 'selected' : ''}`}
+                  onClick={() => setEmotion(emotion === em ? '' : em)}
+                >
+                  {EMOTION_LABELS[em]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="confidence">ระดับความมั่นใจ: {confidence}/10</label>
+            <input
+              id="confidence"
+              type="range"
+              min="1"
+              max="10"
+              value={confidence}
+              onChange={e => setConfidence(Number(e.target.value))}
+              className="confidence-slider"
+            />
+          </div>
+        </div>
+
+        {/* Review */}
+        <div className="form-section">
+          <div className="form-section-title">การทบทวน (Review)</div>
+          <div className="form-group">
+            <label>ได้ทำตามแผนที่วางไว้หรือไม่?</label>
+            <div className="yesno-toggle">
+              <button type="button" className={followedPlan === true ? 'active-yes' : ''} onClick={() => setFollowedPlan(followedPlan === true ? null : true)}>ใช่</button>
+              <button type="button" className={followedPlan === false ? 'active-no' : ''} onClick={() => setFollowedPlan(followedPlan === false ? null : false)}>ไม่ใช่</button>
+            </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="review">สิ่งที่ได้เรียนรู้จากไม้นี้</label>
+            <textarea id="review" value={review} onChange={e => setReview(e.target.value)} placeholder="บันทึกข้อคิด ความผิดพลาด หรือสิ่งที่จะทำให้ดีขึ้นในครั้งต่อไป…" />
+          </div>
+        </div>
+
+        {/* Screenshots */}
+        <div className="form-section">
+          <div className="form-section-title">ภาพกราฟ (Screenshots)</div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>ภาพก่อนเข้าสถานะ (Before)</label>
+              {previewBeforeUrl ? (
+                <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
+                  <img
+                    src={previewBeforeUrl}
+                    alt="Before preview"
+                    style={{ width: '100%', maxHeight: '220px', objectFit: 'cover', display: 'block' }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', padding: '8px', background: 'var(--color-bg-card)', borderTop: '1px solid var(--color-border)' }}>
+                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                      เปลี่ยนภาพ
+                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)} />
+                    </label>
+                    <button type="button" className="btn btn-ghost btn-sm text-negative" onClick={handleRemoveBeforeScreenshot}>
+                      ลบภาพ
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label className="screenshot-upload">
+                  <div>📷 คลิกเพื่ออัปโหลดภาพก่อนเข้าสถานะ</div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 5 MB)</div>
+                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)} />
+                </label>
+              )}
+            </div>
+
+            <div className="form-group">
+              <label>ภาพหลังปิดสถานะ (After)</label>
+              {previewAfterUrl ? (
+                <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
+                  <img
+                    src={previewAfterUrl}
+                    alt="After preview"
+                    style={{ width: '100%', maxHeight: '220px', objectFit: 'cover', display: 'block' }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', padding: '8px', background: 'var(--color-bg-card)', borderTop: '1px solid var(--color-border)' }}>
+                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+                      เปลี่ยนภาพ
+                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)} />
+                    </label>
+                    <button type="button" className="btn btn-ghost btn-sm text-negative" onClick={handleRemoveAfterScreenshot}>
+                      ลบภาพ
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label className="screenshot-upload">
+                  <div>📷 คลิกเพื่ออัปโหลดภาพหลังปิดสถานะ</div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 5 MB)</div>
+                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)} />
+                </label>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Visibility */}
+        <div className="form-section">
+          <div className="form-section-title">การมองเห็น (Visibility)</div>
+          <div className="form-group">
+            <select value={visibility} onChange={e => setVisibility(e.target.value as Visibility)}>
+              <option value="shared">แชร์กับคู่เทรด — มองเห็นได้ทั้งสองคน</option>
+              <option value="private">ส่วนตัว — มองเห็นได้เฉพาะฉันเท่านั้น</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Submit */}
+        <div className="flex gap-3">
+          <button type="submit" className="btn btn-primary btn-lg" disabled={saving}>
+            {saving ? 'กำลังบันทึก…' : isEdit ? 'อัปเดตรายการเทรด' : 'บันทึกรายการเทรด'}
+          </button>
+          <button type="button" className="btn btn-secondary btn-lg" onClick={() => navigate(-1)}>
+            ยกเลิก
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
