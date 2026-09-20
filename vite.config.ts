@@ -10,14 +10,15 @@ export default defineConfig({
       devOptions: {
         enabled: true,
       },
-      includeAssets: ['favicon.svg'],
+      includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'TradeTogether',
-        short_name: 'TradeTogether',
+        name: 'TStep',
+        short_name: 'TStep',
         description: 'บันทึกการเทรดส่วนตัวสำหรับคู่เทรด',
         theme_color: '#0f1117',
         background_color: '#0f1117',
         display: 'standalone',
+        orientation: 'portrait',
         start_url: '/',
         icons: [
           {
@@ -27,6 +28,11 @@ export default defineConfig({
           },
           {
             src: 'pwa-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+          },
+          {
+            src: 'pwa-maskable-512x512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable',

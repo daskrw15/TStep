@@ -10,12 +10,12 @@ VALUES (
   'trade-screenshots',
   false,
   41943040,
-  ARRAY['image/png', 'image/jpeg', 'image/webp']
+  ARRAY['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/heic', 'image/heif']
 )
 ON CONFLICT (id) DO UPDATE SET
   public = false,
   file_size_limit = 41943040,
-  allowed_mime_types = ARRAY['image/png', 'image/jpeg', 'image/webp'];
+  allowed_mime_types = ARRAY['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/heic', 'image/heif'];
 
 -- Storage Upload Policy: Members can only upload to their workspace path
 DROP POLICY IF EXISTS "Members can upload screenshots" ON storage.objects;

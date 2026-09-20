@@ -6,10 +6,12 @@ import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { syncToCloud } from '../../services/sync';
 import { exportAsJSON, exportAsCSV, downloadFile, importFromJSON, validateImportData, type ImportResult } from '../../services/dataExport';
 import { CURRENCIES, type Currency, type Strategy, type LocalStrategy } from '../../types';
+import { usePWAInstall } from '../../hooks/usePWAInstall';
 
 export default function SettingsPage() {
   const { user, profile, updateProfile, signOut } = useAuth();
   const { workspace, partner, members, regenerateInviteCode, revokeInviteCode, updateWorkspaceCapital } = useWorkspace();
+  const { isInstallable, isInstalled, installApp } = usePWAInstall();
 
   const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
   const [currency, setCurrency] = useState<Currency>(profile?.preferred_currency ?? 'THB');
@@ -343,6 +345,23 @@ export default function SettingsPage() {
               <div className="text-negative mt-2">{importResult.errors.join(', ')}</div>
             )}
           </div>
+        )}
+      </div>
+
+      {/* PWA App Installation */}
+      <div className="settings-section">
+        <h2 className="settings-section-title">แอพพลิเคชัน (PWA Mobile App)</h2>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-3)' }}>
+          {isInstalled
+            ? '✅ คุณกำลังใช้งานผ่านแอพพลิเคชันที่ติดตั้งบนอุปกรณ์นี้แล้ว'
+            : isInstallable
+              ? 'คุณสามารถติดตั้ง TStep ลงบนหน้าจอโฮมเพื่อการใช้งานที่สะดวก รวดเร็ว และรองรับโหมดออฟไลน์'
+              : 'สามารถเพิ่ม TStep ไปยังหน้าจอโฮมผ่านเมนู "Add to Home Screen" ในเบราว์เซอร์'}
+        </div>
+        {isInstallable && (
+          <button className="btn btn-primary" onClick={installApp}>
+            📲 ติดตั้งแอพ TStep ลงบนอุปกรณ์
+          </button>
         )}
       </div>
 

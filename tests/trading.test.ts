@@ -948,12 +948,15 @@ describe('Screenshot Validation and Handling', () => {
     expect(result.error).toContain('ขนาดไฟล์เกิน 40 MB');
   });
 
-  it('accepts supported image MIME types and extensions: PNG, JPEG, JPG, WebP', () => {
+  it('accepts supported image MIME types and extensions: PNG, JPEG, JPG, WebP, GIF, HEIC, HEIF', () => {
     const supported = [
       new File([new Uint8Array(10)], 'test.png', { type: 'image/png' }),
       new File([new Uint8Array(10)], 'test.jpeg', { type: 'image/jpeg' }),
       new File([new Uint8Array(10)], 'test.jpg', { type: 'image/jpeg' }),
       new File([new Uint8Array(10)], 'test.webp', { type: 'image/webp' }),
+      new File([new Uint8Array(10)], 'test.gif', { type: 'image/gif' }),
+      new File([new Uint8Array(10)], 'test.heic', { type: 'image/heic' }),
+      new File([new Uint8Array(10)], 'test.heif', { type: 'image/heif' }),
     ];
 
     for (const f of supported) {
@@ -962,17 +965,17 @@ describe('Screenshot Validation and Handling', () => {
     }
   });
 
-  it('rejects unsupported file formats (PDF, GIF, executable)', () => {
+  it('rejects unsupported non-image file formats (PDF, executable, video)', () => {
     const unsupported = [
       new File([new Uint8Array(10)], 'doc.pdf', { type: 'application/pdf' }),
-      new File([new Uint8Array(10)], 'anim.gif', { type: 'image/gif' }),
+      new File([new Uint8Array(10)], 'video.mp4', { type: 'video/mp4' }),
       new File([new Uint8Array(10)], 'script.exe', { type: 'application/octet-stream' }),
     ];
 
     for (const f of unsupported) {
       const res = validateScreenshotFile(f);
       expect(res.valid).toBe(false);
-      expect(res.error).toContain('รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPEG, JPG หรือ WebP');
+      expect(res.error).toContain('รองรับเฉพาะไฟล์รูปภาพ (PNG, JPEG, JPG, WebP, GIF, HEIC/HEIF) เท่านั้น');
     }
   });
 

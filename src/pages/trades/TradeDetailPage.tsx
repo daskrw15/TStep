@@ -23,6 +23,7 @@ export default function TradeDetailPage() {
 
   const [beforeUrl, setBeforeUrl] = useState<string | null>(null);
   const [afterUrl, setAfterUrl] = useState<string | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -224,17 +225,47 @@ export default function TradeDetailPage() {
           <div className="grid-2">
             {beforeUrl && (
               <div>
-                <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-2)' }}>ภาพกราฟก่อนเข้าสถานะ (Before)</div>
-                <img src={beforeUrl} alt="Before trade" style={{ width: '100%', borderRadius: 'var(--radius-md)' }} />
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-2)' }}>ภาพกราฟก่อนเข้าสถานะ (Before) - แตะเพื่อขยาย</div>
+                <img
+                  src={beforeUrl}
+                  alt="Before trade"
+                  style={{ width: '100%', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}
+                  onClick={() => setLightboxUrl(beforeUrl)}
+                />
               </div>
             )}
             {afterUrl && (
               <div>
-                <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-2)' }}>ภาพกราฟหลังปิดสถานะ (After)</div>
-                <img src={afterUrl} alt="After trade" style={{ width: '100%', borderRadius: 'var(--radius-md)' }} />
+                <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-2)' }}>ภาพกราฟหลังปิดสถานะ (After) - แตะเพื่อขยาย</div>
+                <img
+                  src={afterUrl}
+                  alt="After trade"
+                  style={{ width: '100%', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}
+                  onClick={() => setLightboxUrl(afterUrl)}
+                />
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Lightbox Modal */}
+      {lightboxUrl && (
+        <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
+          <button
+            type="button"
+            className="lightbox-close-btn"
+            onClick={() => setLightboxUrl(null)}
+            aria-label="Close"
+          >
+            ✕ ปิด
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Expanded screenshot"
+            className="lightbox-img"
+            onClick={(e) => e.stopPropagation()}
+          />
         </div>
       )}
 

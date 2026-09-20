@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, withSyncMeta } from '../../db';
@@ -71,12 +71,27 @@ export default function AddTradePage() {
   const [followedPlan, setFollowedPlan] = useState<boolean | null>(null);
   const [review, setReview] = useState('');
   const [visibility, setVisibility] = useState<Visibility>('shared');
+
+  // Screenshot states
   const [screenshotBefore, setScreenshotBefore] = useState<File | null>(null);
   const [screenshotAfter, setScreenshotAfter] = useState<File | null>(null);
   const [existingBeforePath, setExistingBeforePath] = useState<string | null>(null);
   const [existingAfterPath, setExistingAfterPath] = useState<string | null>(null);
   const [previewBeforeUrl, setPreviewBeforeUrl] = useState<string | null>(null);
   const [previewAfterUrl, setPreviewAfterUrl] = useState<string | null>(null);
+  const [fileBeforeSize, setFileBeforeSize] = useState<string | null>(null);
+  const [fileAfterSize, setFileAfterSize] = useState<string | null>(null);
+  const [isDraggingBefore, setIsDraggingBefore] = useState(false);
+  const [isDraggingAfter, setIsDraggingAfter] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [pasteNotice, setPasteNotice] = useState<string | null>(null);
+
+  // Hidden file input refs
+  const beforeFileInputRef = useRef<HTMLInputElement>(null);
+  const beforeCameraInputRef = useRef<HTMLInputElement>(null);
+  const afterFileInputRef = useRef<HTMLInputElement>(null);
+  const afterCameraInputRef = useRef<HTMLInputElement>(null);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -182,6 +197,12 @@ export default function AddTradePage() {
 
   const parseNum = (v: string) => v.trim() ? Number(v) : null;
 
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const handleSelectBeforeFile = (file: File | null) => {
     if (!file) return;
     const { valid, error: validationErr } = validateScreenshotFile(file);
@@ -191,6 +212,7 @@ export default function AddTradePage() {
     }
     setError('');
     setScreenshotBefore(file);
+    setFileBeforeSize(formatFileSize(file.size));
     setPreviewBeforeUrl(URL.createObjectURL(file));
   };
 
@@ -203,7 +225,86 @@ export default function AddTradePage() {
     }
     setError('');
     setScreenshotAfter(file);
+    setFileAfterSize(formatFileSize(file.size));
     setPreviewAfterUrl(URL.createObjectURL(file));
+  };
+
+  // Clipboard Paste Listener (Ctrl+V / Browser Paste)
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement;
+      // Allow standard text paste inside text fields
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') &&
+        (target as HTMLInputElement).type !== 'file'
+      ) {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        let hasImage = false;
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith('image/')) {
+            hasImage = true;
+            break;
+          }
+        }
+        if (!hasImage) return; // Normal text paste
+      }
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            // Automatically assign to Before if empty, otherwise After
+            if (!previewBeforeUrl && !existingBeforePath) {
+              handleSelectBeforeFile(file);
+              setPasteNotice('วางภาพลงใน "ภาพก่อนเข้าสถานะ (Before)" สำเร็จ');
+            } else {
+              handleSelectAfterFile(file);
+              setPasteNotice('วางภาพลงใน "ภาพหลังปิดสถานะ (After)" สำเร็จ');
+            }
+            setTimeout(() => setPasteNotice(null), 3500);
+            break;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [previewBeforeUrl, existingBeforePath, previewAfterUrl, existingAfterPath]);
+
+  // Drag and Drop handlers
+  const handleDragOver = (e: React.DragEvent, slot: 'before' | 'after') => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (slot === 'before') setIsDraggingBefore(true);
+    else setIsDraggingAfter(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent, slot: 'before' | 'after') => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (slot === 'before') setIsDraggingBefore(false);
+    else setIsDraggingAfter(false);
+  };
+
+  const handleDrop = (e: React.DragEvent, slot: 'before' | 'after') => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (slot === 'before') setIsDraggingBefore(false);
+    else setIsDraggingAfter(false);
+
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      if (slot === 'before') handleSelectBeforeFile(file);
+      else handleSelectAfterFile(file);
+    }
   };
 
   const handleRemoveBeforeScreenshot = (e: React.MouseEvent) => {
@@ -211,6 +312,7 @@ export default function AddTradePage() {
     setScreenshotBefore(null);
     setExistingBeforePath(null);
     setPreviewBeforeUrl(null);
+    setFileBeforeSize(null);
   };
 
   const handleRemoveAfterScreenshot = (e: React.MouseEvent) => {
@@ -218,6 +320,7 @@ export default function AddTradePage() {
     setScreenshotAfter(null);
     setExistingAfterPath(null);
     setPreviewAfterUrl(null);
+    setFileAfterSize(null);
   };
 
   const handleDeleteTrade = async () => {
@@ -574,61 +677,203 @@ export default function AddTradePage() {
 
         {/* Screenshots */}
         <div className="form-section">
-          <div className="form-section-title">ภาพกราฟ (Screenshots)</div>
+          <div className="form-section-title flex justify-between items-center">
+            <span>ภาพกราฟ (Screenshots)</span>
+            <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', textTransform: 'none' }}>
+              💡 วางภาพด้วย Ctrl+V ได้ทุกที่ในหน้านี้
+            </span>
+          </div>
+
+          {pasteNotice && (
+            <div className="badge badge-positive mb-3" style={{ padding: '6px 12px', fontSize: '12px', width: '100%', justifyContent: 'center' }}>
+              📋 {pasteNotice}
+            </div>
+          )}
+
           <div className="form-row">
+            {/* Hidden Inputs for Before */}
+            <input
+              ref={beforeFileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)}
+            />
+            <input
+              ref={beforeCameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              style={{ display: 'none' }}
+              onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)}
+            />
+
+            {/* Before Slot */}
             <div className="form-group">
-              <label>ภาพก่อนเข้าสถานะ (Before)</label>
+              <label className="flex justify-between items-center mb-1">
+                <span>ภาพก่อนเข้าสถานะ (Before)</span>
+                {fileBeforeSize && <span className="badge badge-neutral">{fileBeforeSize}</span>}
+              </label>
+
               {previewBeforeUrl ? (
-                <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
-                  <img
-                    src={previewBeforeUrl}
-                    alt="Before preview"
-                    style={{ width: '100%', maxHeight: '220px', objectFit: 'cover', display: 'block' }}
-                  />
-                  <div style={{ display: 'flex', gap: '8px', padding: '8px', background: 'var(--color-bg-card)', borderTop: '1px solid var(--color-border)' }}>
-                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
-                      เปลี่ยนภาพ
-                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)} />
-                    </label>
+                <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--color-border)', background: 'var(--color-bg-card)' }}>
+                  <div
+                    style={{ position: 'relative', cursor: 'zoom-in', maxHeight: '240px', overflow: 'hidden', background: '#000' }}
+                    onClick={() => setLightboxUrl(previewBeforeUrl)}
+                    title="คลิกเพื่อดูภาพขยาย"
+                  >
+                    <img
+                      src={previewBeforeUrl}
+                      alt="Before preview"
+                      style={{ width: '100%', height: '220px', objectFit: 'contain', display: 'block' }}
+                    />
+                    <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.7)', padding: '3px 8px', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: '#fff' }}>
+                      🔍 ดูภาพขยาย
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', padding: '10px', background: 'var(--color-bg-card)', borderTop: '1px solid var(--color-border)', flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => beforeFileInputRef.current?.click()}>
+                      📁 เปลี่ยนไฟล์
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => beforeCameraInputRef.current?.click()}>
+                      📷 ถ่ายใหม่
+                    </button>
                     <button type="button" className="btn btn-ghost btn-sm text-negative" onClick={handleRemoveBeforeScreenshot}>
                       ลบภาพ
                     </button>
                   </div>
                 </div>
               ) : (
-                <label className="screenshot-upload">
-                  <div>📷 คลิกเพื่ออัปโหลดภาพก่อนเข้าสถานะ</div>
-                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 40 MB)</div>
-                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectBeforeFile(e.target.files?.[0] ?? null)} />
-                </label>
+                <div
+                  className={`screenshot-upload ${isDraggingBefore ? 'active-drag' : ''}`}
+                  onDragOver={e => handleDragOver(e, 'before')}
+                  onDragLeave={e => handleDragLeave(e, 'before')}
+                  onDrop={e => handleDrop(e, 'before')}
+                  onClick={() => beforeFileInputRef.current?.click()}
+                  style={{
+                    borderStyle: isDraggingBefore ? 'solid' : 'dashed',
+                    borderColor: isDraggingBefore ? 'var(--color-accent)' : undefined,
+                    background: isDraggingBefore ? 'var(--color-accent-subtle)' : undefined,
+                  }}
+                >
+                  <div style={{ fontSize: '1.75rem', marginBottom: '6px' }}>📸</div>
+                  <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                    {isDraggingBefore ? 'ปล่อยเพื่อวางภาพที่นี่' : 'คลิกหรือลากไฟล์ภาพมาวางที่นี่'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px', marginBottom: '10px' }}>
+                    PNG, JPG, WebP, GIF, HEIC (สูงสุด 40 MB)
+                  </div>
+                  <div className="flex justify-center gap-2" onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => beforeFileInputRef.current?.click()}
+                    >
+                      📁 เลือกจากคลังภาพ
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => beforeCameraInputRef.current?.click()}
+                    >
+                      📷 ถ่ายภาพ
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
 
+            {/* Hidden Inputs for After */}
+            <input
+              ref={afterFileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)}
+            />
+            <input
+              ref={afterCameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              style={{ display: 'none' }}
+              onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)}
+            />
+
+            {/* After Slot */}
             <div className="form-group">
-              <label>ภาพหลังปิดสถานะ (After)</label>
+              <label className="flex justify-between items-center mb-1">
+                <span>ภาพหลังปิดสถานะ (After)</span>
+                {fileAfterSize && <span className="badge badge-neutral">{fileAfterSize}</span>}
+              </label>
+
               {previewAfterUrl ? (
-                <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--color-border)' }}>
-                  <img
-                    src={previewAfterUrl}
-                    alt="After preview"
-                    style={{ width: '100%', maxHeight: '220px', objectFit: 'cover', display: 'block' }}
-                  />
-                  <div style={{ display: 'flex', gap: '8px', padding: '8px', background: 'var(--color-bg-card)', borderTop: '1px solid var(--color-border)' }}>
-                    <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
-                      เปลี่ยนภาพ
-                      <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)} />
-                    </label>
+                <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--color-border)', background: 'var(--color-bg-card)' }}>
+                  <div
+                    style={{ position: 'relative', cursor: 'zoom-in', maxHeight: '240px', overflow: 'hidden', background: '#000' }}
+                    onClick={() => setLightboxUrl(previewAfterUrl)}
+                    title="คลิกเพื่อดูภาพขยาย"
+                  >
+                    <img
+                      src={previewAfterUrl}
+                      alt="After preview"
+                      style={{ width: '100%', height: '220px', objectFit: 'contain', display: 'block' }}
+                    />
+                    <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.7)', padding: '3px 8px', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: '#fff' }}>
+                      🔍 ดูภาพขยาย
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', padding: '10px', background: 'var(--color-bg-card)', borderTop: '1px solid var(--color-border)', flexWrap: 'wrap' }}>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => afterFileInputRef.current?.click()}>
+                      📁 เปลี่ยนไฟล์
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => afterCameraInputRef.current?.click()}>
+                      📷 ถ่ายใหม่
+                    </button>
                     <button type="button" className="btn btn-ghost btn-sm text-negative" onClick={handleRemoveAfterScreenshot}>
                       ลบภาพ
                     </button>
                   </div>
                 </div>
               ) : (
-                <label className="screenshot-upload">
-                  <div>📷 คลิกเพื่ออัปโหลดภาพหลังปิดสถานะ</div>
-                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px' }}>PNG, JPG, WebP (สูงสุด 40 MB)</div>
-                  <input type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: 'none' }} onChange={e => handleSelectAfterFile(e.target.files?.[0] ?? null)} />
-                </label>
+                <div
+                  className={`screenshot-upload ${isDraggingAfter ? 'active-drag' : ''}`}
+                  onDragOver={e => handleDragOver(e, 'after')}
+                  onDragLeave={e => handleDragLeave(e, 'after')}
+                  onDrop={e => handleDrop(e, 'after')}
+                  onClick={() => afterFileInputRef.current?.click()}
+                  style={{
+                    borderStyle: isDraggingAfter ? 'solid' : 'dashed',
+                    borderColor: isDraggingAfter ? 'var(--color-accent)' : undefined,
+                    background: isDraggingAfter ? 'var(--color-accent-subtle)' : undefined,
+                  }}
+                >
+                  <div style={{ fontSize: '1.75rem', marginBottom: '6px' }}>📸</div>
+                  <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                    {isDraggingAfter ? 'ปล่อยเพื่อวางภาพที่นี่' : 'คลิกหรือลากไฟล์ภาพมาวางที่นี่'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px', marginBottom: '10px' }}>
+                    PNG, JPG, WebP, GIF, HEIC (สูงสุด 40 MB)
+                  </div>
+                  <div className="flex justify-center gap-2" onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => afterFileInputRef.current?.click()}
+                    >
+                      📁 เลือกจากคลังภาพ
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => afterCameraInputRef.current?.click()}
+                    >
+                      📷 ถ่ายภาพ
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -668,6 +913,26 @@ export default function AddTradePage() {
           )}
         </div>
       </form>
+
+      {/* Lightbox Modal */}
+      {lightboxUrl && (
+        <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
+          <button
+            type="button"
+            className="lightbox-close-btn"
+            onClick={() => setLightboxUrl(null)}
+            aria-label="Close"
+          >
+            ✕ ปิด
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Expanded screenshot preview"
+            className="lightbox-img"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteConfirm && existingTrade && (

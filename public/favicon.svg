@@ -1,4 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" rx="20" fill="#0f1117"/>
-  <text x="50" y="62" font-family="Arial, sans-serif" font-size="40" font-weight="700" fill="#6c8cff" text-anchor="middle">TT</text>
+  <rect width="100" height="100" rx="22" fill="#0f1117"/>
+  <rect x="8" y="8" width="84" height="84" rx="16" fill="#1a1d27" stroke="#2e3145" stroke-width="2"/>
+  <!-- Stepping Bars -->
+  <line x1="28" y1="46" x2="28" y2="76" stroke="#9ba1b0" stroke-width="3" stroke-linecap="round"/>
+  <rect x="22" y="52" width="12" height="20" rx="3" fill="#6c8cff"/>
+  
+  <line x1="50" y1="32" x2="50" y2="76" stroke="#9ba1b0" stroke-width="3" stroke-linecap="round"/>
+  <rect x="44" y="38" width="12" height="34" rx="3" fill="#859dff"/>
+  
+  <line x1="72" y1="16" x2="72" y2="76" stroke="#9ba1b0" stroke-width="3" stroke-linecap="round"/>
+  <rect x="66" y="22" width="12" height="50" rx="3" fill="#4ade80"/>
 </svg>

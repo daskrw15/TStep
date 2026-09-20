@@ -1,17 +1,19 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useSync } from '../../hooks/useSync';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
+import { usePWAInstall } from '../../hooks/usePWAInstall';
 
 export default function AppLayout() {
   const { workspace } = useWorkspace();
   const { pendingCount, isOnline } = useSync(workspace?.id ?? null);
+  const { isInstallable, installApp } = usePWAInstall();
   const navigate = useNavigate();
 
   return (
     <>
       {/* Desktop Sidebar */}
       <aside className="sidebar">
-        <div className="sidebar-logo">TradeTogether</div>
+        <div className="sidebar-logo">TStep</div>
 
         <nav className="sidebar-nav">
           <NavLink to="/" end className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
@@ -30,6 +32,18 @@ export default function AppLayout() {
             <span className="sidebar-link-icon">⚙️</span> ตั้งค่า
           </NavLink>
         </nav>
+
+        {isInstallable && (
+          <div style={{ padding: '0 var(--space-4)', marginBottom: 'var(--space-3)' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ width: '100%', borderColor: 'var(--color-primary)', color: 'var(--color-primary-light)' }}
+              onClick={installApp}
+            >
+              📲 ติดตั้งแอพ TStep
+            </button>
+          </div>
+        )}
 
         <div className="sidebar-cta">
           <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => navigate('/trades/new')}>
@@ -52,6 +66,30 @@ export default function AppLayout() {
 
       {/* Main Content */}
       <main className="main-content">
+        {/* Mobile Header Bar */}
+        <div className="mobile-header">
+          <div className="mobile-header-title">TStep</div>
+          <div className="flex items-center gap-2">
+            {isInstallable && (
+              <button
+                className="btn btn-primary btn-sm"
+                style={{ padding: '4px 10px', fontSize: 'var(--text-xs)' }}
+                onClick={installApp}
+              >
+                📲 ติดตั้ง
+              </button>
+            )}
+            <div className="connection-bar" style={{ padding: '4px 8px', fontSize: 'var(--text-xs)' }}>
+              <span className={`connection-dot ${isOnline ? 'online' : 'offline'}`} />
+              {pendingCount > 0 && (
+                <span className="badge badge-sync" style={{ padding: '2px 6px', fontSize: '10px' }}>
+                  {pendingCount}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="content-container">
           <Outlet />
         </div>

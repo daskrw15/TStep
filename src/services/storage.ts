@@ -6,7 +6,19 @@ export interface UploadResult {
 }
 
 export const MAX_SCREENSHOT_FILE_SIZE = 40 * 1024 * 1024; // 40MB
-export const ALLOWED_SCREENSHOT_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+export const ALLOWED_SCREENSHOT_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence',
+];
+
+export const ALLOWED_SCREENSHOT_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'heic', 'heif'];
 
 /**
  * Validate a screenshot file before upload.
@@ -18,10 +30,12 @@ export function validateScreenshotFile(file: File): { valid: boolean; error: str
 
   const type = file.type.toLowerCase();
   const ext = file.name.split('.').pop()?.toLowerCase();
-  const isTypeValid = ALLOWED_SCREENSHOT_TYPES.includes(type) || (ext && ['png', 'jpg', 'jpeg', 'webp'].includes(ext));
+  const isTypeValid = ALLOWED_SCREENSHOT_TYPES.includes(type) ||
+    (ext && ALLOWED_SCREENSHOT_EXTENSIONS.includes(ext)) ||
+    type.startsWith('image/');
 
   if (!isTypeValid) {
-    return { valid: false, error: 'รองรับเฉพาะไฟล์รูปภาพประเภท PNG, JPEG, JPG หรือ WebP เท่านั้น' };
+    return { valid: false, error: 'รองรับเฉพาะไฟล์รูปภาพ (PNG, JPEG, JPG, WebP, GIF, HEIC/HEIF) เท่านั้น' };
   }
 
   return { valid: true, error: null };
