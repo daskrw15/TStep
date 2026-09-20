@@ -197,17 +197,17 @@ export default function DashboardPage() {
             <div>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>เงินทุนปัจจุบัน (Current Capital)</div>
               <span style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: 'var(--color-text-primary)' }}>
-                ฿{capitalSummary.currentTotalCapital.toLocaleString()}
+                {formatCurrency(capitalSummary.currentTotalCapital, currency)}
               </span>
             </div>
-            {usdRate != null && (
+            {currency === 'THB' && usdRate != null && (
               <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)', alignSelf: 'flex-end', marginBottom: '2px' }}>
                 ≈ {formatUsd(capitalSummary.currentTotalCapital)} <span style={{ fontSize: '10px' }}>(อัตราแลกเปลี่ยนจริง)</span>
               </span>
             )}
             <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                เงินทุนเริ่มต้น ฿{capitalSummary.initialTotalCapital.toLocaleString()} · P&L สะสม
+                เงินทุนเริ่มต้น {formatCurrency(capitalSummary.initialTotalCapital, currency)} · P&L สะสม
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
                 <span className={`pnl-value ${capitalSummary.totalRealizedPnL >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontWeight: 700, fontSize: 'var(--text-base)' }}>
@@ -245,13 +245,13 @@ export default function DashboardPage() {
                   คุณ
                 </div>
                 <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
-                  ฿{capitalSummary.currentUserCapital.toLocaleString()}
+                  {formatCurrency(capitalSummary.currentUserCapital, currency)}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                  เริ่มต้น ฿{capitalSummary.initialUserCapital.toLocaleString()} ({capitalSummary.initialUserOwnershipPct.toFixed(1)}%)
+                  เริ่มต้น {formatCurrency(capitalSummary.initialUserCapital, currency)} ({capitalSummary.initialUserOwnershipPct.toFixed(1)}%)
                   {capitalSummary.userRealizedPnL !== 0 && (
                     <span className={capitalSummary.userRealizedPnL >= 0 ? ' pnl-positive' : ' pnl-negative'}>
-                      {' '}({capitalSummary.userRealizedPnL >= 0 ? '+' : ''}฿{capitalSummary.userRealizedPnL.toLocaleString()})
+                      {' '}({formatCurrency(capitalSummary.userRealizedPnL, currency)})
                     </span>
                   )}
                 </div>
@@ -271,13 +271,13 @@ export default function DashboardPage() {
                   {partnerName}
                 </div>
                 <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, marginTop: '2px' }}>
-                  ฿{capitalSummary.currentPartnerCapital.toLocaleString()}
+                  {formatCurrency(capitalSummary.currentPartnerCapital, currency)}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
-                  เริ่มต้น ฿{capitalSummary.initialPartnerCapital.toLocaleString()} ({capitalSummary.initialPartnerOwnershipPct.toFixed(1)}%)
+                  เริ่มต้น {formatCurrency(capitalSummary.initialPartnerCapital, currency)} ({capitalSummary.initialPartnerOwnershipPct.toFixed(1)}%)
                   {capitalSummary.partnerRealizedPnL !== 0 && (
                     <span className={capitalSummary.partnerRealizedPnL >= 0 ? ' pnl-positive' : ' pnl-negative'}>
-                      {' '}({capitalSummary.partnerRealizedPnL >= 0 ? '+' : ''}฿{capitalSummary.partnerRealizedPnL.toLocaleString()})
+                      {' '}({formatCurrency(capitalSummary.partnerRealizedPnL, currency)})
                     </span>
                   )}
                 </div>

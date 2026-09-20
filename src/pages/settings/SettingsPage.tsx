@@ -216,7 +216,7 @@ export default function SettingsPage() {
       <div className="settings-section">
         <h2 className="settings-section-title">ตั้งค่าเงินทุนและสัดส่วน (Capital & Ownership)</h2>
         <p className="text-muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-4)' }}>
-          กำหนดเงินทุนเริ่มต้นของคุณและคู่เทรด (หน่วยเป็นเงินบาท THB) เพื่อคำนวณสัดส่วนความเป็นเจ้าของอัตโนมัติ
+          กำหนดเงินทุนเริ่มต้นของคุณและคู่เทรด ({currency}) เพื่อคำนวณสัดส่วนความเป็นเจ้าของอัตโนมัติ
         </p>
 
         {capitalMessage && (
@@ -230,7 +230,7 @@ export default function SettingsPage() {
 
         <div className="form-row mb-4">
           <div className="form-group">
-            <label htmlFor="userCap">เงินทุนของคุณ (฿ THB)</label>
+            <label htmlFor="userCap">เงินทุนของคุณ ({currency})</label>
             <input
               id="userCap"
               type="number"
@@ -238,11 +238,11 @@ export default function SettingsPage() {
               step="any"
               value={userCapitalInput}
               onChange={e => setUserCapitalInput(e.target.value)}
-              placeholder="เช่น 60000"
+              placeholder={currency === 'THB' ? 'เช่น 60000' : 'เช่น 2000'}
             />
           </div>
           <div className="form-group">
-            <label htmlFor="partnerCap">เงินทุนของคู่เทรด (฿ THB)</label>
+            <label htmlFor="partnerCap">เงินทุนของคู่เทรด ({currency})</label>
             <input
               id="partnerCap"
               type="number"
@@ -250,7 +250,7 @@ export default function SettingsPage() {
               step="any"
               value={partnerCapitalInput}
               onChange={e => setPartnerCapitalInput(e.target.value)}
-              placeholder="เช่น 40000"
+              placeholder={currency === 'THB' ? 'เช่น 40000' : 'เช่น 1500'}
             />
           </div>
         </div>
@@ -267,14 +267,14 @@ export default function SettingsPage() {
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>สรุปการคำนวณสัดส่วน:</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
                 <span style={{ fontWeight: 600 }}>เงินทุนรวม:</span>
-                <span style={{ fontWeight: 700, fontSize: 'var(--text-lg)', color: 'var(--color-text-primary)' }}>฿{total.toLocaleString()}</span>
+                <span style={{ fontWeight: 700, fontSize: 'var(--text-lg)', color: 'var(--color-text-primary)' }}>{formatCurrency(total, currency)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-sm)', marginBottom: '4px' }}>
-                <span>คุณ: ฿{uCap.toLocaleString()}</span>
+                <span>คุณ: {formatCurrency(uCap, currency)}</span>
                 <span style={{ fontWeight: 700, color: 'var(--color-accent)' }}>{uPct.toFixed(1)}%</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-sm)' }}>
-                <span>คู่เทรด: ฿{pCap.toLocaleString()}</span>
+                <span>คู่เทรด: {formatCurrency(pCap, currency)}</span>
                 <span style={{ fontWeight: 700, color: '#a855f7' }}>{pPct.toFixed(1)}%</span>
               </div>
             </div>

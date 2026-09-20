@@ -13,9 +13,10 @@ import { calculateAutoSlTp } from '../../utils/trading';
 import { format } from 'date-fns';
 
 export default function AddTradePage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { workspace } = useWorkspace();
   const navigate = useNavigate();
+  const currency = profile?.preferred_currency ?? 'THB';
   const { id } = useParams();
   const isEdit = !!id;
 
@@ -511,14 +512,14 @@ export default function AddTradePage() {
               </select>
             </div>
             <div className="form-group">
-              <label htmlFor="pnl">กำไร/ขาดทุนจริง (Realized P&L in USD)</label>
+              <label htmlFor="pnl">กำไร/ขาดทุนจริง (Realized P&L {currency === 'USD' ? 'in USD' : `in ${currency}`})</label>
               <input
                 id="pnl"
                 type="number"
                 step="any"
                 value={pnlInput}
                 onChange={e => setPnlInput(e.target.value)}
-                placeholder="เช่น 125.50 หรือ -75.25"
+                placeholder={currency === 'THB' ? 'เช่น 3500 หรือ -1500' : 'เช่น 125.50 หรือ -75.25'}
               />
             </div>
           </div>

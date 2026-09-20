@@ -423,10 +423,12 @@ export default function TradesPage() {
             >
               <div className="form-group mb-4">
                 <label htmlFor="modalRealizedPnL">
-                  จำนวนเงินกำไร/ขาดทุนจริง (Realized P&L in USD)
+                  จำนวนเงินกำไร/ขาดทุนจริง (Realized P&L {currency === 'USD' ? 'in USD' : `in ${currency}`})
                 </label>
                 <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                  <span style={{ position: 'absolute', left: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>$</span>
+                  <span style={{ position: 'absolute', left: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+                    {currency === 'THB' ? '฿' : currency === 'EUR' ? '€' : '$'}
+                  </span>
                   <input
                     id="modalRealizedPnL"
                     type="number"
@@ -435,13 +437,13 @@ export default function TradesPage() {
                     required={targetResult !== 'be'}
                     value={resultAmountInput}
                     onChange={e => setResultAmountInput(e.target.value)}
-                    placeholder={targetResult === 'tp' ? 'เช่น 125.50' : targetResult === 'sl' ? 'เช่น 75.25' : '0.00 หรือค่าธรรมเนียม'}
+                    placeholder={targetResult === 'tp' ? (currency === 'THB' ? 'เช่น 3500 หรือ 1250.50' : 'เช่น 125.50') : targetResult === 'sl' ? (currency === 'THB' ? 'เช่น 1500' : 'เช่น 75.25') : '0.00 หรือค่าธรรมเนียม'}
                     style={{ paddingLeft: '28px', fontSize: 'var(--text-lg)', fontWeight: 600 }}
                   />
                 </div>
                 <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '4px' }}>
-                  {targetResult === 'tp' && '💡 ระบบจะบันทึกเป็นยอดกำไรสุทธิ (+USD) เข้าเงินทุนอัตโนมัติ'}
-                  {targetResult === 'sl' && '💡 ระบบจะบันทึกเป็นยอดขาดทุนสุทธิ (-USD) หักจากเงินทุนอัตโนมัติ'}
+                  {targetResult === 'tp' && `💡 ระบบจะบันทึกเป็นยอดกำไรสุทธิ (+${currency}) เข้าเงินทุนอัตโนมัติ`}
+                  {targetResult === 'sl' && `💡 ระบบจะบันทึกเป็นยอดขาดทุนสุทธิ (-${currency}) หักจากเงินทุนอัตโนมัติ`}
                   {targetResult === 'be' && '💡 ระบุ 0.00 หรือผลลัพธ์สุทธิหลังหักค่าธรรมเนียม'}
                 </div>
               </div>
