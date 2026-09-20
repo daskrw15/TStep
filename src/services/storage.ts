@@ -42,7 +42,91 @@ export function validateScreenshotFile(file: File): { valid: boolean; error: str
 }
 
 /**
- * Upload a screenshot to Supabase Storage.
+ * Automatically compress and fit any image to optimized web dimensions & size
+ * This ensures even huge camera photos or 8K screenshots fit easily without hitting storage limits.
+ */
+export async function compressAndFitImage(
+  file: File,
+  maxDimension = 2560,
+  quality = 0.85
+): Promise<File> {
+  // If not a standard browser image or already tiny SVG/GIF, return as is
+  if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
+    return file;
+  }
+
+  return new Promise((resolve) => {
+    // If browser doesn't support ImageBitmap/Canvas, fallback to original
+    if (typeof window === 'undefined' || !window.createImageBitmap) {
+      resolve(file);
+      return;
+    }
+
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+
+      // Calculate scaled dimensions maintaining aspect ratio
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // Determine best output format
+      const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+      const outputQuality = file.type === 'image/png' ? undefined : quality;
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob || (blob.size >= file.size && width === img.naturalWidth)) {
+            // If compression didn't help and size is unchanged, use original
+            resolve(file);
+            return;
+          }
+
+          const newFileName = file.name.replace(/\.[^/.]+$/, '') + (outputType === 'image/png' ? '.png' : '.jpg');
+          const fittedFile = new File([blob], newFileName, {
+            type: outputType,
+            lastModified: Date.now(),
+          });
+          resolve(fittedFile);
+        },
+        outputType,
+        outputQuality
+      );
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file); // Fallback on load error
+    };
+
+    img.src = objectUrl;
+  });
+}
+
+/**
+ * Upload a screenshot to Supabase Storage with auto-fit compression.
  * Path: {workspaceId}/{tradeId}/{type}.{ext}
  */
 export async function uploadScreenshot(
@@ -56,13 +140,21 @@ export async function uploadScreenshot(
     return { path: null, error: validation.error };
   }
 
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? 'png';
+  // Auto-compress and fit any image resolution/file size to fast web standard
+  let processedFile = file;
+  try {
+    processedFile = await compressAndFitImage(file);
+  } catch (err) {
+    console.warn('Image auto-compression skipped, uploading original:', err);
+  }
+
+  const ext = processedFile.name.split('.').pop()?.toLowerCase() ?? 'jpg';
   const path = `${workspaceId}/${tradeId}/${type}.${ext}`;
 
   try {
     const { error } = await supabase.storage
       .from('trade-screenshots')
-      .upload(path, file, { upsert: true });
+      .upload(path, processedFile, { upsert: true, contentType: processedFile.type });
 
     if (error) {
       console.error('Screenshot upload error:', error);
