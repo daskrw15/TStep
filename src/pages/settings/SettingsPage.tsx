@@ -7,6 +7,7 @@ import { syncToCloud } from '../../services/sync';
 import { exportAsJSON, exportAsCSV, downloadFile, importFromJSON, validateImportData, type ImportResult } from '../../services/dataExport';
 import { CURRENCIES, type Currency, type Strategy, type LocalStrategy } from '../../types';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
+import { formatCurrency } from '../../utils/trading';
 
 export default function SettingsPage() {
   const { user, profile, updateProfile, signOut } = useAuth();
