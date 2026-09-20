@@ -42,22 +42,22 @@ export function validateScreenshotFile(file: File): { valid: boolean; error: str
 }
 
 /**
- * Automatically compress and fit any image to optimized web dimensions & size
- * This ensures even huge camera photos or 8K screenshots fit easily without hitting storage limits.
+ * Automatically compress and fit any image to optimized web dimensions & size.
+ * Targets < 1.5MB (typically 200KB - 800KB) so it never exceeds Supabase storage limits.
  */
 export async function compressAndFitImage(
   file: File,
-  maxDimension = 2560,
-  quality = 0.85
+  maxDimension = 2048,
+  initialQuality = 0.82
 ): Promise<File> {
-  // If not a standard browser image or already tiny SVG/GIF, return as is
-  if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
+  // If SVG, return as is
+  if (file.type === 'image/svg+xml') {
     return file;
   }
 
   return new Promise((resolve) => {
-    // If browser doesn't support ImageBitmap/Canvas, fallback to original
-    if (typeof window === 'undefined' || !window.createImageBitmap) {
+    // If not in browser environment, return original
+    if (typeof window === 'undefined') {
       resolve(file);
       return;
     }
@@ -69,7 +69,7 @@ export async function compressAndFitImage(
       URL.revokeObjectURL(objectUrl);
       let { width, height } = img;
 
-      // Calculate scaled dimensions maintaining aspect ratio
+      // Scale dimensions
       if (width > maxDimension || height > maxDimension) {
         if (width > height) {
           height = Math.round((height * maxDimension) / width);
@@ -92,19 +92,44 @@ export async function compressAndFitImage(
 
       ctx.drawImage(img, 0, 0, width, height);
 
-      // Determine best output format
-      const outputType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-      const outputQuality = file.type === 'image/png' ? undefined : quality;
+      // Always output standard web JPEG for photos/charts unless small PNG
+      const isPngSmall = file.type === 'image/png' && file.size < 1.5 * 1024 * 1024;
+      const outputType = isPngSmall ? 'image/png' : 'image/jpeg';
+      const outputQuality = isPngSmall ? undefined : initialQuality;
 
       canvas.toBlob(
         (blob) => {
-          if (!blob || (blob.size >= file.size && width === img.naturalWidth)) {
-            // If compression didn't help and size is unchanged, use original
+          if (!blob) {
             resolve(file);
             return;
           }
 
-          const newFileName = file.name.replace(/\.[^/.]+$/, '') + (outputType === 'image/png' ? '.png' : '.jpg');
+          // If blob is still > 2MB, downscale further
+          if (blob.size > 2 * 1024 * 1024 && width > 1200) {
+            const smallCanvas = document.createElement('canvas');
+            smallCanvas.width = Math.round(width * 0.7);
+            smallCanvas.height = Math.round(height * 0.7);
+            const smallCtx = smallCanvas.getContext('2d');
+            if (smallCtx) {
+              smallCtx.drawImage(canvas, 0, 0, smallCanvas.width, smallCanvas.height);
+              smallCanvas.toBlob(
+                (secondBlob) => {
+                  if (secondBlob) {
+                    const newFileName = file.name.replace(/\.[^/.]+$/, '') + '.jpg';
+                    resolve(new File([secondBlob], newFileName, { type: 'image/jpeg', lastModified: Date.now() }));
+                  } else {
+                    resolve(new File([blob], file.name.replace(/\.[^/.]+$/, '') + '.jpg', { type: 'image/jpeg', lastModified: Date.now() }));
+                  }
+                },
+                'image/jpeg',
+                0.75
+              );
+              return;
+            }
+          }
+
+          const ext = outputType === 'image/png' ? '.png' : '.jpg';
+          const newFileName = file.name.replace(/\.[^/.]+$/, '') + ext;
           const fittedFile = new File([blob], newFileName, {
             type: outputType,
             lastModified: Date.now(),
@@ -118,7 +143,7 @@ export async function compressAndFitImage(
 
     img.onerror = () => {
       URL.revokeObjectURL(objectUrl);
-      resolve(file); // Fallback on load error
+      resolve(file);
     };
 
     img.src = objectUrl;
