@@ -71,6 +71,54 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     fetchWorkspace();
   }, [user]);
 
+  // Realtime subscription for workspace & members to sync capital/settings cross-device
+  useEffect(() => {
+    if (!workspace?.id) return;
+
+    const channel = supabase
+      .channel(`workspace-settings-${workspace.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'workspaces',
+          filter: `id=eq.${workspace.id}`,
+        },
+        () => {
+          fetchWorkspace();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'workspace_members',
+          filter: `workspace_id=eq.${workspace.id}`,
+        },
+        () => {
+          fetchWorkspace();
+        }
+      )
+      .subscribe();
+
+    // Also refresh on focus/visibility
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchWorkspace();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
+    return () => {
+      supabase.removeChannel(channel);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [workspace?.id]);
+
   const partner = members.find(m => m.user_id !== user?.id) as (WorkspaceMember & { profile?: Profile }) | null ?? null;
 
   const createWorkspace = async (name: string) => {
