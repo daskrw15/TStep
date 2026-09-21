@@ -34,13 +34,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Get user's workspace membership
+    // Get user's primary workspace membership (ordered deterministically by join date)
     const { data: membership } = await supabase
       .from('workspace_members')
       .select('workspace_id')
       .eq('user_id', user.id)
+      .order('joined_at', { ascending: true })
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (!membership) {
       setWorkspace(null);

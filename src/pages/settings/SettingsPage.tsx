@@ -16,8 +16,8 @@ export default function SettingsPage() {
   const { workspace, partner, members, regenerateInviteCode, revokeInviteCode, updateWorkspaceCapital } = useWorkspace();
   const { isInstallable, isInstalled, installApp } = usePWAInstall();
   const { usdToThb, thbToUsd } = useExchangeRate();
-  const { pendingCount, isOnline, isSyncing, triggerSync } = useSync(workspace?.id ?? null);
-  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const { pendingCount, isOnline, isSyncing, syncStatus, lastSyncTime, lastError, triggerSync } = useSync(workspace?.id ?? null);
+  const [syncFeedback, setSyncFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
   const [currency, setCurrency] = useState<Currency>(profile?.preferred_currency ?? 'THB');
@@ -389,24 +389,35 @@ export default function SettingsPage() {
             </span>
           </div>
           <div className="flex justify-between items-center" style={{ fontSize: 'var(--text-sm)' }}>
+            <span className="text-muted">การซิงค์ล่าสุด:</span>
+            <span style={{ fontWeight: 500 }}>
+              {lastSyncTime ? new Date(lastSyncTime).toLocaleString('th-TH') : 'ยังไม่มีประวัติการซิงค์'}
+            </span>
+          </div>
+          <div className="flex justify-between items-center" style={{ fontSize: 'var(--text-sm)' }}>
             <span className="text-muted">รายการที่รอส่งขึ้นคลาวด์:</span>
             <span>
               {pendingCount > 0 ? (
                 <span className="badge badge-sync">รอซิงค์ {pendingCount} รายการ</span>
               ) : (
-                <span style={{ color: 'var(--color-positive)' }}>✓ ซิงค์ครบถ้วนแล้ว</span>
+                <span style={{ color: 'var(--color-positive)' }}>✓ ข้อมูลบนเครื่องซิงค์ครบถ้วนแล้ว</span>
               )}
             </span>
           </div>
+          {lastError && (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-negative)', marginTop: '4px' }}>
+              ⚠️ ข้อความระบบ: {lastError}
+            </div>
+          )}
         </div>
 
         {syncFeedback && (
           <div className="auth-error mb-4" style={{
-            background: 'var(--color-positive-bg)',
-            color: 'var(--color-positive)',
+            background: syncFeedback.type === 'success' ? 'var(--color-positive-bg)' : undefined,
+            color: syncFeedback.type === 'success' ? 'var(--color-positive)' : undefined,
             fontSize: 'var(--text-sm)'
           }}>
-            {syncFeedback}
+            {syncFeedback.text}
           </div>
         )}
 
@@ -414,12 +425,21 @@ export default function SettingsPage() {
           className="btn btn-primary"
           onClick={async () => {
             setSyncFeedback(null);
-            await triggerSync();
-            setSyncFeedback('ซิงค์ข้อมูลระหว่างอุปกรณ์กับคลาวด์เรียบร้อยแล้ว!');
+            try {
+              await triggerSync();
+              if (syncStatus === 'error' || lastError) {
+                setSyncFeedback({ type: 'error', text: `การซิงค์มีข้อผิดพลาด: ${lastError ?? 'โปรดตรวจสอบการเชื่อมต่อ'}` });
+              } else {
+                setSyncFeedback({ type: 'success', text: 'ซิงค์ข้อมูลระหว่างอุปกรณ์กับคลาวด์เรียบร้อยแล้ว!' });
+              }
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              setSyncFeedback({ type: 'error', text: `เกิดข้อผิดพลาดในการซิงค์: ${msg}` });
+            }
           }}
           disabled={isSyncing || !isOnline}
         >
-          {isSyncing ? '⏳ กำลังซิงค์ข้อมูล…' : '🔄 ซิงค์ข้อมูลกับคลาวด์เดี๋ยวนี้ (Sync Now)'}
+          {isSyncing ? '⏳ กำลังซิงค์ข้อมูลกับคลาวด์…' : '🔄 ซิงค์ข้อมูลกับคลาวด์เดี๋ยวนี้ (Sync Now)'}
         </button>
       </div>
 

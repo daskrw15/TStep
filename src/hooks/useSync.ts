@@ -22,21 +22,47 @@ import type { Trade, JournalEntry, Strategy } from '../types';
  * - Provides pending count for UI indicators
  * - Periodic fallback sync every 60s when online
  */
+export type SyncState = 'idle' | 'syncing' | 'success' | 'error';
+
 export function useSync(workspaceId: string | null) {
   const isOnline = useOnlineStatus();
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncState>('idle');
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(() => {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem('tstep_last_sync_time') : null;
+  });
+  const [lastError, setLastError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const doSync = async () => {
     if (!workspaceId) return;
-    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setSyncStatus('idle');
+      return;
+    }
 
     setIsSyncing(true);
+    setSyncStatus('syncing');
+    setLastError(null);
+
     try {
-      await fullSync(workspaceId);
-    } catch (err) {
+      const res = await fullSync(workspaceId);
+      if (res.success) {
+        setSyncStatus('success');
+        setLastSyncTime(res.timestamp);
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('tstep_last_sync_time', res.timestamp);
+        }
+      } else {
+        setSyncStatus('error');
+        setLastError(res.errors.join(', '));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Sync error:', err);
+      setSyncStatus('error');
+      setLastError(msg);
     } finally {
       setIsSyncing(false);
       const count = await getPendingCount();
@@ -183,5 +209,13 @@ export function useSync(workspaceId: string | null) {
     return () => clearInterval(id);
   }, []);
 
-  return { pendingCount, isSyncing, isOnline, triggerSync: doSync };
+  return {
+    pendingCount,
+    isSyncing,
+    isOnline,
+    syncStatus,
+    lastSyncTime,
+    lastError,
+    triggerSync: doSync,
+  };
 }

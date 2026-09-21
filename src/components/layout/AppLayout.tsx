@@ -5,9 +5,21 @@ import { usePWAInstall } from '../../hooks/usePWAInstall';
 
 export default function AppLayout() {
   const { workspace } = useWorkspace();
-  const { pendingCount, isOnline, isSyncing, triggerSync } = useSync(workspace?.id ?? null);
+  const { pendingCount, isOnline, isSyncing, syncStatus, lastSyncTime, triggerSync } = useSync(workspace?.id ?? null);
   const { isInstallable, installApp } = usePWAInstall();
   const navigate = useNavigate();
+
+  const formatShortTime = (iso: string | null) => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
+  const syncTimeStr = formatShortTime(lastSyncTime);
 
   return (
     <>
@@ -68,11 +80,14 @@ export default function AppLayout() {
             }}
             onClick={triggerSync}
             disabled={isSyncing}
-            title="คลิกเพื่อบังคับซิงค์ข้อมูลกับคลาวด์ทันที"
+            title={lastSyncTime ? `ซิงค์ล่าสุด: ${new Date(lastSyncTime).toLocaleString('th-TH')} (คลิกเพื่อซิงค์ทันที)` : 'คลิกเพื่อบังคับซิงค์ข้อมูลกับคลาวด์ทันที'}
           >
             <span className={`connection-dot ${isOnline ? 'online' : 'offline'}`} />
-            <span style={{ fontSize: 'var(--text-xs)' }}>
-              {isSyncing ? 'กำลังซิงค์…' : isOnline ? 'ออนไลน์ (ซิงค์แล้ว)' : 'ออฟไลน์'}
+            <span style={{ fontSize: 'var(--text-xs)', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <span>{isSyncing ? 'กำลังซิงค์…' : syncStatus === 'error' ? 'ซิงค์ผิดพลาด' : isOnline ? 'ออนไลน์' : 'ออฟไลน์'}</span>
+              {syncTimeStr && !isSyncing && (
+                <span style={{ fontSize: '10px', opacity: 0.6 }}>ซิงค์ล่าสุด {syncTimeStr}</span>
+              )}
             </span>
             {pendingCount > 0 ? (
               <span className="badge badge-sync" style={{ marginLeft: 'auto', fontSize: '10px' }}>
@@ -80,7 +95,7 @@ export default function AppLayout() {
               </span>
             ) : (
               <span style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', opacity: 0.6 }}>
-                {isSyncing ? '⏳' : '🔄'}
+                {isSyncing ? '⏳' : syncStatus === 'error' ? '⚠️' : '🔄'}
               </span>
             )}
           </button>
@@ -117,18 +132,20 @@ export default function AppLayout() {
               }}
               onClick={triggerSync}
               disabled={isSyncing}
-              title="แตะเพื่อซิงค์ข้อมูลทันที"
+              title={lastSyncTime ? `ซิงค์ล่าสุด: ${new Date(lastSyncTime).toLocaleString('th-TH')}` : 'แตะเพื่อซิงค์ข้อมูลทันที'}
             >
               <span className={`connection-dot ${isOnline ? 'online' : 'offline'}`} />
               <span style={{ fontSize: '11px', color: 'var(--color-text-secondary)' }}>
-                {isSyncing ? 'กำลังซิงค์…' : 'ซิงค์'}
+                {isSyncing ? 'กำลังซิงค์…' : syncStatus === 'error' ? 'ลองใหม่' : syncTimeStr ? `ซิงค์ ${syncTimeStr}` : 'ซิงค์'}
               </span>
               {pendingCount > 0 ? (
                 <span className="badge badge-sync" style={{ padding: '1px 5px', fontSize: '9px' }}>
                   {pendingCount}
                 </span>
               ) : (
-                <span style={{ fontSize: '10px', opacity: 0.7 }}>{isSyncing ? '⏳' : '🔄'}</span>
+                <span style={{ fontSize: '10px', opacity: 0.7 }}>
+                  {isSyncing ? '⏳' : syncStatus === 'error' ? '⚠️' : '🔄'}
+                </span>
               )}
             </button>
           </div>
