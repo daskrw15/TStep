@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { supabase } from '../services/supabase';
 import { useAuth } from './AuthContext';
+import { fullSync } from '../services/sync';
 import type { Workspace, WorkspaceMember, Profile } from '../types';
 
 interface WorkspaceState {
@@ -56,6 +57,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .single();
 
     setWorkspace(ws);
+    // Immediately initiate full bi-directional sync on workspace discovery
+    fullSync(ws.id).catch(err => console.warn('Workspace load sync:', err));
 
     // Fetch members with profiles
     const { data: mems } = await supabase

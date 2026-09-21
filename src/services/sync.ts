@@ -18,8 +18,9 @@ import type { Trade, JournalEntry, Strategy } from '../types';
 // ─── Push local pending changes to Supabase ─────────────────────────────────
 
 async function pushPendingTrades(): Promise<void> {
+  // Push both pending and previously errored records
   const pending = await db.trades
-    .where('_sync_status').equals('pending')
+    .filter(t => t._sync_status === 'pending' || t._sync_status === 'error')
     .toArray();
 
   for (const trade of pending) {
@@ -54,7 +55,7 @@ async function pushPendingTrades(): Promise<void> {
 
 async function pushPendingJournalEntries(): Promise<void> {
   const pending = await db.journal_entries
-    .where('_sync_status').equals('pending')
+    .filter(e => e._sync_status === 'pending' || e._sync_status === 'error')
     .toArray();
 
   for (const entry of pending) {
@@ -86,7 +87,7 @@ async function pushPendingJournalEntries(): Promise<void> {
 
 async function pushPendingStrategies(): Promise<void> {
   const pending = await db.strategies
-    .where('_sync_status').equals('pending')
+    .filter(s => s._sync_status === 'pending' || s._sync_status === 'error')
     .toArray();
 
   for (const strategy of pending) {
@@ -382,8 +383,8 @@ export async function fullSync(workspaceId: string): Promise<void> {
 
 export function getPendingCount(): Promise<number> {
   return Promise.all([
-    db.trades.where('_sync_status').equals('pending').count(),
-    db.journal_entries.where('_sync_status').equals('pending').count(),
-    db.strategies.where('_sync_status').equals('pending').count(),
+    db.trades.filter(t => t._sync_status === 'pending' || t._sync_status === 'error').count(),
+    db.journal_entries.filter(e => e._sync_status === 'pending' || e._sync_status === 'error').count(),
+    db.strategies.filter(s => s._sync_status === 'pending' || s._sync_status === 'error').count(),
   ]).then(counts => counts.reduce((a, b) => a + b, 0));
 }

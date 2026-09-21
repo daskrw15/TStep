@@ -4,6 +4,7 @@ import { db, withSyncMeta } from '../../db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { syncToCloud } from '../../services/sync';
+import { useSync } from '../../hooks/useSync';
 import { exportAsJSON, exportAsCSV, downloadFile, importFromJSON, validateImportData, type ImportResult } from '../../services/dataExport';
 import { CURRENCIES, type Currency, type Strategy, type LocalStrategy } from '../../types';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
@@ -15,6 +16,8 @@ export default function SettingsPage() {
   const { workspace, partner, members, regenerateInviteCode, revokeInviteCode, updateWorkspaceCapital } = useWorkspace();
   const { isInstallable, isInstalled, installApp } = usePWAInstall();
   const { usdToThb, thbToUsd } = useExchangeRate();
+  const { pendingCount, isOnline, isSyncing, triggerSync } = useSync(workspace?.id ?? null);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
 
   const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
   const [currency, setCurrency] = useState<Currency>(profile?.preferred_currency ?? 'THB');
@@ -368,6 +371,56 @@ export default function SettingsPage() {
         {(strategies ?? []).length === 0 && (
           <div className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>ยังไม่มีกลยุทธ์ที่บันทึกไว้ สามารถเพิ่มได้จากด้านบน</div>
         )}
+      </div>
+
+      {/* Cloud Synchronization */}
+      <div className="settings-section">
+        <h2 className="settings-section-title">การซิงค์ข้อมูลคลาวด์ (Cloud Synchronization)</h2>
+        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-3)' }}>
+          ระบบจะซิงค์ข้อมูลระหว่างเครื่องคอมพิวเตอร์และมือถือโดยอัตโนมัติเมื่อเปิดใช้งานหรือสลับหน้าจอ หากต้องการอัปโหลดข้อมูลจากเครื่องนี้หรือดึงข้อมูลล่าสุดจากคลาวด์ทันที สามารถกดปุ่มด้านล่างได้
+        </div>
+
+        <div className="card card-compact mb-4" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          <div className="flex justify-between items-center" style={{ fontSize: 'var(--text-sm)' }}>
+            <span className="text-muted">สถานะการเชื่อมต่อ:</span>
+            <span className="flex items-center gap-2">
+              <span className={`connection-dot ${isOnline ? 'online' : 'offline'}`} />
+              <strong>{isOnline ? 'เชื่อมต่อคลาวด์สำเร็จ (Online)' : 'ออฟไลน์ (Offline)'}</strong>
+            </span>
+          </div>
+          <div className="flex justify-between items-center" style={{ fontSize: 'var(--text-sm)' }}>
+            <span className="text-muted">รายการที่รอส่งขึ้นคลาวด์:</span>
+            <span>
+              {pendingCount > 0 ? (
+                <span className="badge badge-sync">รอซิงค์ {pendingCount} รายการ</span>
+              ) : (
+                <span style={{ color: 'var(--color-positive)' }}>✓ ซิงค์ครบถ้วนแล้ว</span>
+              )}
+            </span>
+          </div>
+        </div>
+
+        {syncFeedback && (
+          <div className="auth-error mb-4" style={{
+            background: 'var(--color-positive-bg)',
+            color: 'var(--color-positive)',
+            fontSize: 'var(--text-sm)'
+          }}>
+            {syncFeedback}
+          </div>
+        )}
+
+        <button
+          className="btn btn-primary"
+          onClick={async () => {
+            setSyncFeedback(null);
+            await triggerSync();
+            setSyncFeedback('ซิงค์ข้อมูลระหว่างอุปกรณ์กับคลาวด์เรียบร้อยแล้ว!');
+          }}
+          disabled={isSyncing || !isOnline}
+        >
+          {isSyncing ? '⏳ กำลังซิงค์ข้อมูล…' : '🔄 ซิงค์ข้อมูลกับคลาวด์เดี๋ยวนี้ (Sync Now)'}
+        </button>
       </div>
 
       {/* Data Export/Import */}

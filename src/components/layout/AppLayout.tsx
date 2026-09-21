@@ -5,7 +5,7 @@ import { usePWAInstall } from '../../hooks/usePWAInstall';
 
 export default function AppLayout() {
   const { workspace } = useWorkspace();
-  const { pendingCount, isOnline } = useSync(workspace?.id ?? null);
+  const { pendingCount, isOnline, isSyncing, triggerSync } = useSync(workspace?.id ?? null);
   const { isInstallable, installApp } = usePWAInstall();
   const navigate = useNavigate();
 
@@ -52,15 +52,38 @@ export default function AppLayout() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="connection-bar">
+          <button
+            className="connection-bar"
+            style={{
+              width: '100%',
+              background: 'transparent',
+              border: '1px solid var(--color-border-subtle)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--color-text-secondary)',
+              transition: 'background var(--transition-fast)',
+            }}
+            onClick={triggerSync}
+            disabled={isSyncing}
+            title="คลิกเพื่อบังคับซิงค์ข้อมูลกับคลาวด์ทันที"
+          >
             <span className={`connection-dot ${isOnline ? 'online' : 'offline'}`} />
-            {isOnline ? 'ออนไลน์' : 'ออฟไลน์'}
-            {pendingCount > 0 && (
-              <span className="badge badge-sync" style={{ marginLeft: 'auto' }}>
-                รอซิงค์ {pendingCount} รายการ
+            <span style={{ fontSize: 'var(--text-xs)' }}>
+              {isSyncing ? 'กำลังซิงค์…' : isOnline ? 'ออนไลน์ (ซิงค์แล้ว)' : 'ออฟไลน์'}
+            </span>
+            {pendingCount > 0 ? (
+              <span className="badge badge-sync" style={{ marginLeft: 'auto', fontSize: '10px' }}>
+                รอส่ง {pendingCount}
+              </span>
+            ) : (
+              <span style={{ marginLeft: 'auto', fontSize: 'var(--text-xs)', opacity: 0.6 }}>
+                {isSyncing ? '⏳' : '🔄'}
               </span>
             )}
-          </div>
+          </button>
         </div>
       </aside>
 
@@ -79,14 +102,35 @@ export default function AppLayout() {
                 📲 ติดตั้ง
               </button>
             )}
-            <div className="connection-bar" style={{ padding: '4px 8px', fontSize: 'var(--text-xs)' }}>
+            <button
+              className="connection-bar"
+              style={{
+                padding: '4px 8px',
+                fontSize: 'var(--text-xs)',
+                background: 'var(--color-bg-card)',
+                border: '1px solid var(--color-border-subtle)',
+                cursor: 'pointer',
+                borderRadius: 'var(--radius-full)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+              onClick={triggerSync}
+              disabled={isSyncing}
+              title="แตะเพื่อซิงค์ข้อมูลทันที"
+            >
               <span className={`connection-dot ${isOnline ? 'online' : 'offline'}`} />
-              {pendingCount > 0 && (
-                <span className="badge badge-sync" style={{ padding: '2px 6px', fontSize: '10px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--color-text-secondary)' }}>
+                {isSyncing ? 'กำลังซิงค์…' : 'ซิงค์'}
+              </span>
+              {pendingCount > 0 ? (
+                <span className="badge badge-sync" style={{ padding: '1px 5px', fontSize: '9px' }}>
                   {pendingCount}
                 </span>
+              ) : (
+                <span style={{ fontSize: '10px', opacity: 0.7 }}>{isSyncing ? '⏳' : '🔄'}</span>
               )}
-            </div>
+            </button>
           </div>
         </div>
 
