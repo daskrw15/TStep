@@ -12,10 +12,9 @@ import { format } from 'date-fns';
 import type { LocalTrade, Strategy, TradeResult } from '../../types';
 
 export default function TradesPage() {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const { workspace, members } = useWorkspace();
   const navigate = useNavigate();
-  const currency = profile?.preferred_currency ?? 'THB';
 
   const [search, setSearch] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -346,7 +345,7 @@ export default function TradesPage() {
                       {formatR(r)}
                     </span>
                     <span className={`pnl-value ${(pnl ?? 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}`} style={{ fontWeight: 700, minWidth: '70px', textAlign: 'right' }}>
-                      {pnl != null ? formatCurrency(pnl, currency) : '—'}
+                      {pnl != null ? formatCurrency(pnl, 'USD') : '—'}
                     </span>
                   </div>
                 </div>
@@ -423,11 +422,11 @@ export default function TradesPage() {
             >
               <div className="form-group mb-4">
                 <label htmlFor="modalRealizedPnL">
-                  จำนวนเงินกำไร/ขาดทุนจริง (Realized P&L {currency === 'USD' ? 'in USD' : `in ${currency}`})
+                  Realized P&L (USD) / ผลกำไร-ขาดทุนจริง
                 </label>
                 <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                   <span style={{ position: 'absolute', left: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>
-                    {currency === 'THB' ? '฿' : currency === 'EUR' ? '€' : '$'}
+                    $
                   </span>
                   <input
                     id="modalRealizedPnL"
@@ -437,14 +436,14 @@ export default function TradesPage() {
                     required={targetResult !== 'be'}
                     value={resultAmountInput}
                     onChange={e => setResultAmountInput(e.target.value)}
-                    placeholder={targetResult === 'tp' ? (currency === 'THB' ? 'เช่น 3500 หรือ 1250.50' : 'เช่น 125.50') : targetResult === 'sl' ? (currency === 'THB' ? 'เช่น 1500' : 'เช่น 75.25') : '0.00 หรือค่าธรรมเนียม'}
+                    placeholder={targetResult === 'tp' ? 'เช่น 125.50' : targetResult === 'sl' ? 'เช่น 75.25' : '0.00'}
                     style={{ paddingLeft: '28px', fontSize: 'var(--text-lg)', fontWeight: 600 }}
                   />
                 </div>
                 <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '4px' }}>
-                  {targetResult === 'tp' && `💡 ระบบจะบันทึกเป็นยอดกำไรสุทธิ (+${currency}) เข้าเงินทุนอัตโนมัติ`}
-                  {targetResult === 'sl' && `💡 ระบบจะบันทึกเป็นยอดขาดทุนสุทธิ (-${currency}) หักจากเงินทุนอัตโนมัติ`}
-                  {targetResult === 'be' && '💡 ระบุ 0.00 หรือผลลัพธ์สุทธิหลังหักค่าธรรมเนียม'}
+                  {targetResult === 'tp' && '💡 ระบบจะบันทึกเป็นยอดกำไรสุทธิ (+USD) เข้าเงินทุนโดยตรง'}
+                  {targetResult === 'sl' && '💡 ระบบจะบันทึกเป็นยอดขาดทุนสุทธิ (-USD) หักจากเงินทุนโดยตรง'}
+                  {targetResult === 'be' && '💡 ระบุ 0.00 USD หรือผลลัพธ์สุทธิหลังหักค่าธรรมเนียม'}
                 </div>
               </div>
 

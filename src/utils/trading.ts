@@ -91,18 +91,110 @@ export function calculateRMultiple(trade: Trade): number | null {
   return pnl / risk;
 }
 
+// ─── Exchange Rate & Currency Conversion ───────────────────────────────────
+
+/**
+ * Standard fallback exchange rate if network / API is unavailable.
+ * 1 USD ≈ 35.00 THB (1 THB ≈ 0.02857 USD)
+ */
+export const DEFAULT_USD_THB_RATE = 35.0;
+export const DEFAULT_THB_TO_USD_RATE = 1 / DEFAULT_USD_THB_RATE;
+
+export interface ExchangeRates {
+  thbToUsd: number; // e.g. 0.02857
+  usdToThb: number; // e.g. 35.00
+  lastUpdated: number;
+}
+
+// In-memory cache for exchange rates to avoid duplicate network calls
+let cachedRates: ExchangeRates | null = null;
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Fetch real-time exchange rates for THB and USD from a reliable free API.
+ * Returns cached rate if within TTL, or fallback default if offline.
+ */
+export async function fetchExchangeRates(): Promise<ExchangeRates> {
+  const now = Date.now();
+  if (cachedRates && now - cachedRates.lastUpdated < CACHE_TTL_MS) {
+    return cachedRates;
+  }
+
+  try {
+    const res = await fetch('https://open.er-api.com/v6/latest/THB');
+    if (res.ok) {
+      const data = await res.json();
+      const thbToUsd = Number(data?.rates?.USD);
+      if (thbToUsd && !isNaN(thbToUsd) && thbToUsd > 0) {
+        cachedRates = {
+          thbToUsd,
+          usdToThb: 1 / thbToUsd,
+          lastUpdated: now,
+        };
+        return cachedRates;
+      }
+    }
+  } catch (err) {
+    console.warn('Unable to fetch live exchange rate, using fallback default:', err);
+  }
+
+  // Fallback
+  return {
+    thbToUsd: DEFAULT_THB_TO_USD_RATE,
+    usdToThb: DEFAULT_USD_THB_RATE,
+    lastUpdated: now,
+  };
+}
+
+/**
+ * Convert THB to USD using given rate or fallback.
+ * Round to 2 decimal places for monetary consistency.
+ */
+export function convertThbToUsd(thbAmount: number, customThbToUsdRate?: number): number {
+  const rate = customThbToUsdRate && customThbToUsdRate > 0
+    ? customThbToUsdRate
+    : (cachedRates?.thbToUsd ?? DEFAULT_THB_TO_USD_RATE);
+  return Number((thbAmount * rate).toFixed(2));
+}
+
+/**
+ * Convert USD to THB using given rate or fallback.
+ * Round to 2 decimal places for monetary consistency.
+ */
+export function convertUsdToThb(usdAmount: number, customUsdToThbRate?: number): number {
+  const rate = customUsdToThbRate && customUsdToThbRate > 0
+    ? customUsdToThbRate
+    : (cachedRates?.usdToThb ?? DEFAULT_USD_THB_RATE);
+  return Number((usdAmount * rate).toFixed(2));
+}
+
+// ─── Capital Summary (Canonical USD) ────────────────────────────────────────
+
+/**
+ * Calculate capital summary for user and partner.
+ *
+ * ALL CAPITAL VALUES AND REALIZED P&L VALUES ARE IN USD.
+ * If usdToThbRate is provided, secondary THB display conversions are computed.
+ */
 export function calculateCapitalSummary(params: {
-  initialUserCapital: number;
-  initialPartnerCapital: number;
-  trades: Trade[];
+  initialUserCapital: number; // in USD
+  initialPartnerCapital: number; // in USD
+  trades: Trade[]; // P&L in USD
   userId?: string;
-}): CapitalSummary {
-  const { initialUserCapital, initialPartnerCapital, trades, userId } = params;
-  const initialTotalCapital = initialUserCapital + initialPartnerCapital;
+  usdToThbRate?: number; // optional exchange rate for secondary THB display
+}): CapitalSummary & {
+  initialTotalCapitalThb?: number;
+  currentUserCapitalThb?: number;
+  currentPartnerCapitalThb?: number;
+  currentTotalCapitalThb?: number;
+  totalRealizedPnLThb?: number;
+} {
+  const { initialUserCapital, initialPartnerCapital, trades, userId, usdToThbRate } = params;
+  const initialTotalCapital = Number((initialUserCapital + initialPartnerCapital).toFixed(2));
   const initialUserOwnershipPct = initialTotalCapital > 0 ? (initialUserCapital / initialTotalCapital) * 100 : 50;
   const initialPartnerOwnershipPct = initialTotalCapital > 0 ? (initialPartnerCapital / initialTotalCapital) * 100 : 50;
 
-  // Realized P&L from closed trades with valid P&L
+  // Realized P&L from closed trades with valid P&L (authoritative USD)
   let userRealizedPnL = 0;
   let partnerRealizedPnL = 0;
 
@@ -116,15 +208,20 @@ export function calculateCapitalSummary(params: {
     } else if (userId) {
       partnerRealizedPnL += pnl;
     } else {
-      // If no userId provided, check ownership via member
+      // If no userId provided, default attribution to primary user
       userRealizedPnL += pnl;
     }
   }
 
-  const totalRealizedPnL = userRealizedPnL + partnerRealizedPnL;
-  const currentUserCapital = initialUserCapital + userRealizedPnL;
-  const currentPartnerCapital = initialPartnerCapital + partnerRealizedPnL;
-  const currentTotalCapital = currentUserCapital + currentPartnerCapital;
+  // Round PnLs to 2 decimal places
+  userRealizedPnL = Number(userRealizedPnL.toFixed(2));
+  partnerRealizedPnL = Number(partnerRealizedPnL.toFixed(2));
+  const totalRealizedPnL = Number((userRealizedPnL + partnerRealizedPnL).toFixed(2));
+
+  // Capital in USD = Initial USD + Realized P&L USD
+  const currentUserCapital = Number((initialUserCapital + userRealizedPnL).toFixed(2));
+  const currentPartnerCapital = Number((initialPartnerCapital + partnerRealizedPnL).toFixed(2));
+  const currentTotalCapital = Number((currentUserCapital + currentPartnerCapital).toFixed(2));
 
   const currentUserCapitalShare = currentTotalCapital > 0
     ? (currentUserCapital / currentTotalCapital) * 100
@@ -134,7 +231,13 @@ export function calculateCapitalSummary(params: {
     ? (currentPartnerCapital / currentTotalCapital) * 100
     : initialPartnerOwnershipPct;
 
-  return {
+  const summary: CapitalSummary & {
+    initialTotalCapitalThb?: number;
+    currentUserCapitalThb?: number;
+    currentPartnerCapitalThb?: number;
+    currentTotalCapitalThb?: number;
+    totalRealizedPnLThb?: number;
+  } = {
     initialUserCapital,
     initialPartnerCapital,
     initialTotalCapital,
@@ -149,6 +252,16 @@ export function calculateCapitalSummary(params: {
     currentUserCapitalShare,
     currentPartnerCapitalShare,
   };
+
+  if (usdToThbRate && usdToThbRate > 0) {
+    summary.initialTotalCapitalThb = convertUsdToThb(initialTotalCapital, usdToThbRate);
+    summary.currentUserCapitalThb = convertUsdToThb(currentUserCapital, usdToThbRate);
+    summary.currentPartnerCapitalThb = convertUsdToThb(currentPartnerCapital, usdToThbRate);
+    summary.currentTotalCapitalThb = convertUsdToThb(currentTotalCapital, usdToThbRate);
+    summary.totalRealizedPnLThb = convertUsdToThb(totalRealizedPnL, usdToThbRate);
+  }
+
+  return summary;
 }
 
 // ─── Aggregate Statistics ───────────────────────────────────────────────────

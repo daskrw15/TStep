@@ -12,8 +12,7 @@ import { format } from 'date-fns';
 export default function TradeDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, profile } = useAuth();
-  const currency = profile?.preferred_currency ?? 'THB';
+  const { user } = useAuth();
 
   const trade = useLiveQuery(() => id ? db.trades.get(id) : undefined, [id]);
   const strategy = useLiveQuery(
@@ -100,9 +99,9 @@ export default function TradeDetailPage() {
       {/* Result */}
       <div className="grid-3 mb-6">
         <div className="stat-card">
-          <div className="stat-card-label">P&L</div>
+          <div className="stat-card-label">Realized P&L (USD)</div>
           <div className={`stat-card-value ${(pnl ?? 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-            {pnl != null ? formatCurrency(pnl, currency) : '—'}
+            {pnl != null ? formatCurrency(pnl, 'USD') : '—'}
           </div>
         </div>
         <div className="stat-card">

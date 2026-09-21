@@ -7,49 +7,56 @@ import { syncToCloud } from '../../services/sync';
 import { exportAsJSON, exportAsCSV, downloadFile, importFromJSON, validateImportData, type ImportResult } from '../../services/dataExport';
 import { CURRENCIES, type Currency, type Strategy, type LocalStrategy } from '../../types';
 import { usePWAInstall } from '../../hooks/usePWAInstall';
-import { formatCurrency } from '../../utils/trading';
+import { useExchangeRate } from '../../hooks/useExchangeRate';
+import { convertThbToUsd, convertUsdToThb } from '../../utils/trading';
 
 export default function SettingsPage() {
   const { user, profile, updateProfile, signOut } = useAuth();
   const { workspace, partner, members, regenerateInviteCode, revokeInviteCode, updateWorkspaceCapital } = useWorkspace();
   const { isInstallable, isInstalled, installApp } = usePWAInstall();
+  const { usdToThb, thbToUsd } = useExchangeRate();
 
   const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
   const [currency, setCurrency] = useState<Currency>(profile?.preferred_currency ?? 'THB');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
-  // Capital settings state
+  // Capital settings state (User inputs Initial Capital in THB)
   const myMem = members.find(m => m.user_id === user?.id);
   const pMem = members.find(m => m.user_id !== user?.id);
 
-  const initialUserCap = workspace?.user_capital != null
-    ? workspace.user_capital
-    : (myMem?.capital != null ? myMem.capital : 0);
+  // Canonical workspace capital is stored in USD
+  const initialUserCapUsd = workspace?.user_capital != null
+    ? Number(workspace.user_capital)
+    : (myMem?.capital != null ? Number(myMem.capital) : 0);
 
-  const initialPartnerCap = workspace?.partner_capital != null
-    ? workspace.partner_capital
-    : (pMem?.capital != null ? pMem.capital : 0);
+  const initialPartnerCapUsd = workspace?.partner_capital != null
+    ? Number(workspace.partner_capital)
+    : (pMem?.capital != null ? Number(pMem.capital) : 0);
 
-  const [userCapitalInput, setUserCapitalInput] = useState(initialUserCap.toString());
-  const [partnerCapitalInput, setPartnerCapitalInput] = useState(initialPartnerCap.toString());
+  // Convert stored USD to THB for initial input display if available
+  const initialUserCapThb = initialUserCapUsd > 0
+    ? Math.round(convertUsdToThb(initialUserCapUsd, usdToThb))
+    : 0;
+
+  const initialPartnerCapThb = initialPartnerCapUsd > 0
+    ? Math.round(convertUsdToThb(initialPartnerCapUsd, usdToThb))
+    : 0;
+
+  const [userCapitalInput, setUserCapitalInput] = useState(initialUserCapThb ? initialUserCapThb.toString() : '');
+  const [partnerCapitalInput, setPartnerCapitalInput] = useState(initialPartnerCapThb ? initialPartnerCapThb.toString() : '');
   const [savingCapital, setSavingCapital] = useState(false);
   const [capitalMessage, setCapitalMessage] = useState('');
 
-  // Synchronize inputs if workspace / members load asynchronously
+  // Synchronize inputs if workspace / members / rates load asynchronously
   useEffect(() => {
-    if (workspace?.user_capital != null) {
-      setUserCapitalInput(workspace.user_capital.toString());
-    } else if (myMem?.capital != null) {
-      setUserCapitalInput(myMem.capital.toString());
+    if (userCapitalInput === '' && initialUserCapUsd > 0) {
+      setUserCapitalInput(Math.round(convertUsdToThb(initialUserCapUsd, usdToThb)).toString());
     }
-
-    if (workspace?.partner_capital != null) {
-      setPartnerCapitalInput(workspace.partner_capital.toString());
-    } else if (pMem?.capital != null) {
-      setPartnerCapitalInput(pMem.capital.toString());
+    if (partnerCapitalInput === '' && initialPartnerCapUsd > 0) {
+      setPartnerCapitalInput(Math.round(convertUsdToThb(initialPartnerCapUsd, usdToThb)).toString());
     }
-  }, [workspace?.user_capital, workspace?.partner_capital, myMem?.capital, pMem?.capital]);
+  }, [initialUserCapUsd, initialPartnerCapUsd, usdToThb]);
 
   // Strategy management
   const [newStrategy, setNewStrategy] = useState('');
@@ -217,7 +224,7 @@ export default function SettingsPage() {
       <div className="settings-section">
         <h2 className="settings-section-title">ตั้งค่าเงินทุนและสัดส่วน (Capital & Ownership)</h2>
         <p className="text-muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-4)' }}>
-          กำหนดเงินทุนเริ่มต้นของคุณและคู่เทรด ({currency}) เพื่อคำนวณสัดส่วนความเป็นเจ้าของอัตโนมัติ
+          กำหนดเงินทุนเริ่มต้นของคุณและคู่เทรดเป็นบาท <strong>(Initial Capital (THB))</strong> โดยระบบจะแปลงเป็น <strong>USD</strong> อัตโนมัติตามอัตราแลกเปลี่ยนจริง เพื่อใช้เป็นสกุลเงินหลักในการคำนวณการเทรดและสัดส่วนทั้งหมด
         </p>
 
         {capitalMessage && (
@@ -231,51 +238,83 @@ export default function SettingsPage() {
 
         <div className="form-row mb-4">
           <div className="form-group">
-            <label htmlFor="userCap">เงินทุนของคุณ ({currency})</label>
-            <input
-              id="userCap"
-              type="number"
-              min="0"
-              step="any"
-              value={userCapitalInput}
-              onChange={e => setUserCapitalInput(e.target.value)}
-              placeholder={currency === 'THB' ? 'เช่น 60000' : 'เช่น 2000'}
-            />
+            <label htmlFor="userCap">เงินทุนเริ่มต้นของคุณ (Initial Capital (THB))</label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>฿</span>
+              <input
+                id="userCap"
+                type="number"
+                min="0"
+                step="any"
+                value={userCapitalInput}
+                onChange={e => setUserCapitalInput(e.target.value)}
+                placeholder="เช่น 60000 หรือ 1500"
+                style={{ paddingLeft: '28px' }}
+              />
+            </div>
+            {Number(userCapitalInput) > 0 && (
+              <div style={{ fontSize: '11px', color: 'var(--color-accent)', marginTop: '4px' }}>
+                ≈ ${convertThbToUsd(Number(userCapitalInput), thbToUsd).toFixed(2)} USD (1 USD = ฿{usdToThb.toFixed(2)})
+              </div>
+            )}
           </div>
           <div className="form-group">
-            <label htmlFor="partnerCap">เงินทุนของคู่เทรด ({currency})</label>
-            <input
-              id="partnerCap"
-              type="number"
-              min="0"
-              step="any"
-              value={partnerCapitalInput}
-              onChange={e => setPartnerCapitalInput(e.target.value)}
-              placeholder={currency === 'THB' ? 'เช่น 40000' : 'เช่น 1500'}
-            />
+            <label htmlFor="partnerCap">เงินทุนเริ่มต้นของคู่เทรด (Initial Capital (THB))</label>
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span style={{ position: 'absolute', left: '12px', fontWeight: 600, color: 'var(--color-text-muted)' }}>฿</span>
+              <input
+                id="partnerCap"
+                type="number"
+                min="0"
+                step="any"
+                value={partnerCapitalInput}
+                onChange={e => setPartnerCapitalInput(e.target.value)}
+                placeholder="เช่น 40000 หรือ 1500"
+                style={{ paddingLeft: '28px' }}
+              />
+            </div>
+            {Number(partnerCapitalInput) > 0 && (
+              <div style={{ fontSize: '11px', color: '#a855f7', marginTop: '4px' }}>
+                ≈ ${convertThbToUsd(Number(partnerCapitalInput), thbToUsd).toFixed(2)} USD (1 USD = ฿{usdToThb.toFixed(2)})
+              </div>
+            )}
           </div>
         </div>
 
         {/* Real-time Calculation Preview */}
         {(() => {
-          const uCap = Math.max(0, Number(userCapitalInput) || 0);
-          const pCap = Math.max(0, Number(partnerCapitalInput) || 0);
-          const total = uCap + pCap;
-          const uPct = total > 0 ? (uCap / total) * 100 : 50;
-          const pPct = total > 0 ? (pCap / total) * 100 : 50;
+          const uThb = Math.max(0, Number(userCapitalInput) || 0);
+          const pThb = Math.max(0, Number(partnerCapitalInput) || 0);
+          const totalThb = uThb + pThb;
+
+          // Convert to canonical USD
+          const uUsd = convertThbToUsd(uThb, thbToUsd);
+          const pUsd = convertThbToUsd(pThb, thbToUsd);
+          const totalUsd = Number((uUsd + pUsd).toFixed(2));
+
+          const uPct = totalUsd > 0 ? (uUsd / totalUsd) * 100 : 50;
+          const pPct = totalUsd > 0 ? (pUsd / totalUsd) * 100 : 50;
+
           return (
             <div className="card card-compact mb-4" style={{ background: 'rgba(255,255,255,0.02)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>สรุปการคำนวณสัดส่วน:</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginBottom: 'var(--space-2)' }}>สรุปการแปลงสกุลเงินและสัดส่วน:</div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-                <span style={{ fontWeight: 600 }}>เงินทุนรวม:</span>
-                <span style={{ fontWeight: 700, fontSize: 'var(--text-lg)', color: 'var(--color-text-primary)' }}>{formatCurrency(total, currency)}</span>
+                <span style={{ fontWeight: 600 }}>เงินทุนรวม (Total Capital):</span>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: 700, fontSize: 'var(--text-lg)', color: 'var(--color-text-primary)' }}>
+                    ${totalUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
+                    ≈ ฿{totalThb.toLocaleString()} THB
+                  </div>
+                </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-sm)', marginBottom: '4px' }}>
-                <span>คุณ: {formatCurrency(uCap, currency)}</span>
+                <span>คุณ: ${uUsd.toFixed(2)} USD (฿{uThb.toLocaleString()})</span>
                 <span style={{ fontWeight: 700, color: 'var(--color-accent)' }}>{uPct.toFixed(1)}%</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-sm)' }}>
-                <span>คู่เทรด: {formatCurrency(pCap, currency)}</span>
+                <span>คู่เทรด: ${pUsd.toFixed(2)} USD (฿{pThb.toLocaleString()})</span>
                 <span style={{ fontWeight: 700, color: '#a855f7' }}>{pPct.toFixed(1)}%</span>
               </div>
             </div>
@@ -288,19 +327,23 @@ export default function SettingsPage() {
           onClick={async () => {
             setSavingCapital(true);
             setCapitalMessage('');
-            const uCap = Math.max(0, Number(userCapitalInput) || 0);
-            const pCap = Math.max(0, Number(partnerCapitalInput) || 0);
+            const uThb = Math.max(0, Number(userCapitalInput) || 0);
+            const pThb = Math.max(0, Number(partnerCapitalInput) || 0);
 
-            const res = await updateWorkspaceCapital(uCap, pCap);
+            // Convert THB input to canonical USD using centralized exchange rate
+            const uCapUsd = convertThbToUsd(uThb, thbToUsd);
+            const pCapUsd = convertThbToUsd(pThb, thbToUsd);
+
+            const res = await updateWorkspaceCapital(uCapUsd, pCapUsd);
             setSavingCapital(false);
             if (res.error) {
               setCapitalMessage(`บันทึกเงินทุนไม่สำเร็จ: ${res.error}`);
             } else {
-              setCapitalMessage('บันทึกเงินทุนและสัดส่วนพื้นที่เทรดเรียบร้อยแล้ว!');
+              setCapitalMessage('บันทึกเงินทุนเริ่มต้น (แปลงเป็น USD เรียบร้อย) และคำนวณสัดส่วนสำเร็จ!');
             }
           }}
         >
-          {savingCapital ? 'กำลังบันทึก…' : 'บันทึกการตั้งค่าเงินทุน'}
+          {savingCapital ? 'กำลังบันทึก…' : 'บันทึกการตั้งค่าเงินทุน (Save Capital in USD)'}
         </button>
       </div>
 

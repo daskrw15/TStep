@@ -8,9 +8,8 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import type { LocalTrade } from '../../types';
 
 export default function StatisticsPage() {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const { workspace, members, partner } = useWorkspace();
-  const currency = profile?.preferred_currency ?? 'THB';
 
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -88,12 +87,12 @@ export default function StatisticsPage() {
         </select>
       </div>
 
-      {/* Key Metrics */}
+      {/* Key Metrics (Canonical USD) */}
       <div className="grid-3 mb-6" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
         <div className="stat-card">
-          <div className="stat-card-label">Total P&L</div>
+          <div className="stat-card-label">Total Realized P&L (USD)</div>
           <div className={`stat-card-value ${stats.totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-            {formatCurrency(stats.totalPnL, currency)}
+            {formatCurrency(stats.totalPnL, 'USD')}
           </div>
         </div>
         <div className="stat-card">
@@ -108,25 +107,25 @@ export default function StatisticsPage() {
           <div className="stat-card-value">{stats.profitFactor === Infinity ? '∞' : stats.profitFactor.toFixed(2)}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-card-label">Avg Win</div>
-          <div className="stat-card-value pnl-positive">{formatCurrency(stats.averageWin, currency)}</div>
+          <div className="stat-card-label">Avg Win (USD)</div>
+          <div className="stat-card-value pnl-positive">{formatCurrency(stats.averageWin, 'USD')}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-card-label">Avg Loss</div>
-          <div className="stat-card-value pnl-negative">{formatCurrency(-stats.averageLoss, currency)}</div>
+          <div className="stat-card-label">Avg Loss (USD)</div>
+          <div className="stat-card-value pnl-negative">{formatCurrency(-stats.averageLoss, 'USD')}</div>
         </div>
         <div className="stat-card">
           <div className="stat-card-label">Avg R</div>
           <div className="stat-card-value">{stats.averageR != null ? stats.averageR.toFixed(2) + 'R' : '—'}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-card-label">Max Drawdown</div>
-          <div className="stat-card-value pnl-negative">{formatCurrency(-stats.maxDrawdown, currency)}</div>
+          <div className="stat-card-label">Max Drawdown (USD)</div>
+          <div className="stat-card-value pnl-negative">{formatCurrency(-stats.maxDrawdown, 'USD')}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-card-label">Expectancy</div>
+          <div className="stat-card-label">Expectancy (USD)</div>
           <div className={`stat-card-value ${stats.expectancy >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-            {formatCurrency(stats.expectancy, currency)}
+            {formatCurrency(stats.expectancy, 'USD')}
           </div>
         </div>
         <div className="stat-card">
@@ -135,15 +134,15 @@ export default function StatisticsPage() {
         </div>
       </div>
 
-      {/* Equity Curve */}
+      {/* Equity Curve (USD) */}
       {equityCurve.length > 0 && (
         <div className="card mb-6">
           <div className="flex justify-between items-center mb-4">
             <div>
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>📈 กราฟการเติบโตของพอร์ต (Equity Curve)</div>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>📈 กราฟการเติบโตของพอร์ต (Equity Curve - USD)</div>
               {startingCapital > 0 && (
                 <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '2px' }}>
-                  ทุนเริ่มต้น: ฿{startingCapital.toLocaleString()} · ปัจจุบัน: ฿{(startingCapital + stats.totalPnL).toLocaleString()}
+                  ทุนเริ่มต้น: ${startingCapital.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD · ปัจจุบัน: ${(startingCapital + stats.totalPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD
                 </div>
               )}
             </div>
@@ -154,12 +153,12 @@ export default function StatisticsPage() {
               <YAxis
                 tick={{ fontSize: 11, fill: '#6b7185' }}
                 domain={['auto', 'auto']}
-                tickFormatter={(val) => `฿${Number(val).toLocaleString()}`}
+                tickFormatter={(val) => `$${Number(val).toLocaleString()}`}
               />
               <Tooltip
                 contentStyle={{ background: '#1e2130', border: '1px solid #2e3145', borderRadius: 8, fontSize: 12 }}
                 labelStyle={{ color: '#9ba1b0' }}
-                formatter={(val) => [`฿${Number(val).toLocaleString()}`, 'มูลค่าพอร์ต (Equity)']}
+                formatter={(val) => [`$${Number(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`, 'มูลค่าพอร์ต (Equity)']}
               />
               <Line type="monotone" dataKey="equity" stroke="#6c8cff" strokeWidth={2} dot={{ r: 3, fill: '#6c8cff' }} />
             </LineChart>

@@ -11,6 +11,10 @@ import {
   calculateAutoSlTp,
   formatCurrency,
   formatR,
+  convertThbToUsd,
+  convertUsdToThb,
+  DEFAULT_USD_THB_RATE,
+  DEFAULT_THB_TO_USD_RATE,
 } from '../src/utils/trading';
 import { validateScreenshotFile, MAX_SCREENSHOT_FILE_SIZE } from '../src/services/storage';
 import type { Trade } from '../src/types';
@@ -490,18 +494,167 @@ describe('Duplicate Latest Trade specifications', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Capital, Ownership Percentages and Currency Conversion', () => {
-  it('Calculates total capital and respective ownership percentages correctly', () => {
-    const myCapital = 60000;
-    const partnerCapital = 40000;
-    const totalCapital = myCapital + partnerCapital;
+  it('Calculates total capital and respective ownership percentages correctly in USD', () => {
+    const myCapitalUsd = 1690.14;
+    const partnerCapitalUsd = 1126.76;
+    const totalCapitalUsd = Number((myCapitalUsd + partnerCapitalUsd).toFixed(2));
 
-    expect(totalCapital).toBe(100000);
+    expect(totalCapitalUsd).toBe(2816.90);
 
-    const myPercentage = (myCapital / totalCapital) * 100;
-    const partnerPercentage = (partnerCapital / totalCapital) * 100;
+    const myPercentage = (myCapitalUsd / totalCapitalUsd) * 100;
+    const partnerPercentage = (partnerCapitalUsd / totalCapitalUsd) * 100;
 
-    expect(myPercentage).toBe(60);
-    expect(partnerPercentage).toBe(40);
+    expect(myPercentage).toBeCloseTo(60, 1);
+    expect(partnerPercentage).toBeCloseTo(40, 1);
+  });
+
+  it('Converts THB initial capital to canonical USD using centralized exchange rate', () => {
+    // 60,000 THB at rate 35.5 THB/USD => 1,690.14 USD
+    const rateThbToUsd = 1 / 35.5;
+    const usd = convertThbToUsd(60000, rateThbToUsd);
+    expect(usd).toBe(1690.14);
+
+    // 1,500 THB at default fallback rate (35.0) => 42.86 USD
+    const fallbackUsd = convertThbToUsd(1500);
+    expect(fallbackUsd).toBe(42.86);
+
+    // Convert USD back to THB for secondary display
+    const thb = convertUsdToThb(usd, 35.5);
+    expect(thb).toBeCloseTo(60000, 0);
+  });
+
+  it('Verifies Trade TP result is stored and calculated only as USD', () => {
+    // User enters TP of $125.50
+    const tpTrade = makeTrade({
+      user_id: 'user-1',
+      status: 'closed',
+      result: 'tp',
+      pnl: 125.50, // Authoritative USD
+    });
+    expect(calculatePnL(tpTrade)).toBe(125.50);
+  });
+
+  it('Verifies Trade SL result is stored and calculated only as USD', () => {
+    // User enters SL of $75.25
+    const slTrade = makeTrade({
+      user_id: 'user-1',
+      status: 'closed',
+      result: 'sl',
+      pnl: -75.25, // Authoritative USD
+    });
+    expect(calculatePnL(slTrade)).toBe(-75.25);
+  });
+
+  it('Verifies BE result is stored and calculated only as USD', () => {
+    const beTrade = makeTrade({
+      user_id: 'user-1',
+      status: 'closed',
+      result: 'be',
+      pnl: 0.00, // Authoritative USD
+    });
+    expect(calculatePnL(beTrade)).toBe(0.00);
+  });
+
+  it('USD realized P&L updates capital correctly without converting trade results to THB', () => {
+    // Starting with converted USD initial capitals:
+    // Initial User = $1,500.00, Partner = $1,500.00, Total = $3,000.00
+    // Trade: +$50.00 USD
+    // Current should be $3,000 + $50 = $3,050.00 USD (NOT 3000 THB + 50 USD = 3050 THB!)
+    const trades: Trade[] = [
+      makeTrade({
+        user_id: 'user-1',
+        status: 'closed',
+        result: 'tp',
+        pnl: 50.00,
+      }),
+    ];
+
+    const summary = calculateCapitalSummary({
+      initialUserCapital: 1500.00,
+      initialPartnerCapital: 1500.00,
+      trades,
+      userId: 'user-1',
+      usdToThbRate: 35.0,
+    });
+
+    expect(summary.initialTotalCapital).toBe(3000.00);
+    expect(summary.userRealizedPnL).toBe(50.00);
+    expect(summary.totalRealizedPnL).toBe(50.00);
+    expect(summary.currentUserCapital).toBe(1550.00);
+    expect(summary.currentTotalCapital).toBe(3050.00);
+
+    // Dashboard THB value is strictly a secondary display conversion of the USD total:
+    // 3,050.00 USD * 35.0 = 106,750.00 THB
+    expect(summary.currentTotalCapitalThb).toBe(106750.00);
+  });
+
+  it('Calculates User + Partner capital aggregate correctly in USD and secondary display converts to THB', () => {
+    // User Initial: $2,000.00 USD, Partner Initial: $1,000.00 USD
+    // User Trade: +$125.50 USD
+    // Partner Trade: -$75.25 USD
+    // User Current = $2,125.50 USD
+    // Partner Current = $924.75 USD
+    // Total Current = $3,050.25 USD
+    const trades: Trade[] = [
+      makeTrade({ user_id: 'u1', status: 'closed', result: 'tp', pnl: 125.50 }),
+      makeTrade({ user_id: 'u2', status: 'closed', result: 'sl', pnl: -75.25 }),
+    ];
+
+    const summary = calculateCapitalSummary({
+      initialUserCapital: 2000.00,
+      initialPartnerCapital: 1000.00,
+      trades,
+      userId: 'u1',
+      usdToThbRate: 35.0,
+    });
+
+    expect(summary.currentUserCapital).toBe(2125.50);
+    expect(summary.currentPartnerCapital).toBe(924.75);
+    expect(summary.currentTotalCapital).toBe(3050.25);
+
+    // Secondary THB display conversions
+    expect(summary.currentUserCapitalThb).toBe(convertUsdToThb(2125.50, 35.0));
+    expect(summary.currentPartnerCapitalThb).toBe(convertUsdToThb(924.75, 35.0));
+    expect(summary.currentTotalCapitalThb).toBe(convertUsdToThb(3050.25, 35.0));
+  });
+
+  it('Guarantees no double conversion occurs', () => {
+    // THB 35,000 converted once to USD:
+    const initialThb = 35000;
+    const rateUsdToThb = 35.0;
+    const rateThbToUsd = 1 / 35.0;
+
+    const initialUsd = convertThbToUsd(initialThb, rateThbToUsd);
+    expect(initialUsd).toBe(1000.00);
+
+    // Trade profit: $50 USD
+    const tradePnlUsd = 50.00;
+
+    // Total in USD:
+    const currentUsd = initialUsd + tradePnlUsd;
+    expect(currentUsd).toBe(1050.00);
+
+    // Display THB converted once at the end:
+    const displayThb = convertUsdToThb(currentUsd, rateUsdToThb);
+    expect(displayThb).toBe(36750.00);
+  });
+
+  it('Excludes open or waiting trades from realized capital in USD', () => {
+    const trades: Trade[] = [
+      makeTrade({ user_id: 'u1', status: 'waiting', pnl: null, entry_price: 100, exit_price: 200 }),
+      makeTrade({ user_id: 'u1', status: 'open', pnl: null, entry_price: 100, exit_price: 150 }),
+      makeTrade({ user_id: 'u1', status: 'closed', result: 'tp', pnl: 100.00 }),
+    ];
+
+    const summary = calculateCapitalSummary({
+      initialUserCapital: 1000.00,
+      initialPartnerCapital: 1000.00,
+      trades,
+      userId: 'u1',
+    });
+
+    expect(summary.totalRealizedPnL).toBe(100.00);
+    expect(summary.currentTotalCapital).toBe(2100.00);
   });
 
   it('Identifies the majority capital owner correctly', () => {
@@ -517,21 +670,6 @@ describe('Capital, Ownership Percentages and Currency Conversion', () => {
     expect(calculateMajorityOwner(30000, 70000, 'John')).toBe('John');
     expect(calculateMajorityOwner(50000, 50000, 'John')).toBe('เท่ากันทั้งสองคน');
     expect(calculateMajorityOwner(0, 0, 'John')).toBe('—');
-  });
-
-  it('Converts THB to USD using exchange rate and handles errors gracefully', () => {
-    const convertThbToUsd = (thb: number, rate: number | null): string | null => {
-      if (rate == null || isNaN(rate) || rate <= 0) return null;
-      const usd = thb * rate;
-      return `$${usd.toFixed(2)}`;
-    };
-
-    // Realistic rate: 1 THB = 0.028 USD (approx 35.7 THB/USD)
-    expect(convertThbToUsd(100000, 0.028)).toBe('$2800.00');
-
-    // Missing / offline exchange rate does NOT break or produce corrupt numbers
-    expect(convertThbToUsd(100000, null)).toBeNull();
-    expect(convertThbToUsd(100000, 0)).toBeNull();
   });
 
   it('handles zero trades safely for dashboard display', () => {
