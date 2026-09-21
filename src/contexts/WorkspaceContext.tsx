@@ -58,8 +58,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .single();
 
     setWorkspace(ws);
-    // Immediately initiate full bi-directional sync on workspace discovery
-    fullSync(ws.id).catch(err => console.warn('Workspace load sync:', err));
+    // On initial workspace load (crucial for fresh mobile logins with empty IndexedDB),
+    // await initial cloud sync so the local cache is populated before the UI renders.
+    try {
+      await fullSync(ws.id);
+    } catch (err) {
+      console.warn('Workspace load sync error:', err);
+    }
 
     // Fetch members with profiles
     const { data: mems } = await supabase
