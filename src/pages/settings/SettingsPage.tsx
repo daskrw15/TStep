@@ -19,16 +19,16 @@ export default function SettingsPage() {
   const { pendingCount, isOnline, isSyncing, syncStatus, lastSyncTime, lastError, triggerSync } = useSync(workspace?.id ?? null);
   const [syncFeedback, setSyncFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const [displayName, setDisplayName] = useState(profile?.display_name ?? '');
-  const [currency, setCurrency] = useState<Currency>(profile?.preferred_currency ?? 'THB');
+  // Initial values safely derived without cascading effect loops
+  const [displayName, setDisplayName] = useState(() => profile?.display_name ?? '');
+  const [currency, setCurrency] = useState<Currency>(() => profile?.preferred_currency ?? 'THB');
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
-  // Capital settings state (User inputs Initial Capital in THB)
+  // Capital settings state
   const myMem = members.find(m => m.user_id === user?.id);
   const pMem = members.find(m => m.user_id !== user?.id);
 
-  // Canonical workspace capital is stored in USD
   const initialUserCapUsd = workspace?.user_capital != null
     ? Number(workspace.user_capital)
     : (myMem?.capital != null ? Number(myMem.capital) : 0);
@@ -37,7 +37,6 @@ export default function SettingsPage() {
     ? Number(workspace.partner_capital)
     : (pMem?.capital != null ? Number(pMem.capital) : 0);
 
-  // Convert stored USD to THB for initial input display if available
   const initialUserCapThb = initialUserCapUsd > 0
     ? Math.round(convertUsdToThb(initialUserCapUsd, usdToThb))
     : 0;
@@ -46,20 +45,30 @@ export default function SettingsPage() {
     ? Math.round(convertUsdToThb(initialPartnerCapUsd, usdToThb))
     : 0;
 
-  const [userCapitalInput, setUserCapitalInput] = useState(initialUserCapThb ? initialUserCapThb.toString() : '');
-  const [partnerCapitalInput, setPartnerCapitalInput] = useState(initialPartnerCapThb ? initialPartnerCapThb.toString() : '');
+  const [userCapitalInput, setUserCapitalInput] = useState(() => initialUserCapThb ? initialUserCapThb.toString() : '');
+  const [partnerCapitalInput, setPartnerCapitalInput] = useState(() => initialPartnerCapThb ? initialPartnerCapThb.toString() : '');
   const [savingCapital, setSavingCapital] = useState(false);
   const [capitalMessage, setCapitalMessage] = useState('');
 
-  // Synchronize inputs if workspace / members / rates load asynchronously
+  // Sync profile display name if profile loads asynchronously after initial mount
   useEffect(() => {
-    if (userCapitalInput === '' && initialUserCapUsd > 0) {
-      setUserCapitalInput(Math.round(convertUsdToThb(initialUserCapUsd, usdToThb)).toString());
+    if (profile?.display_name && !displayName) {
+      setDisplayName(profile.display_name);
     }
-    if (partnerCapitalInput === '' && initialPartnerCapUsd > 0) {
-      setPartnerCapitalInput(Math.round(convertUsdToThb(initialPartnerCapUsd, usdToThb)).toString());
+    if (profile?.preferred_currency) {
+      setCurrency(profile.preferred_currency);
     }
-  }, [initialUserCapUsd, initialPartnerCapUsd, usdToThb]);
+  }, [profile?.display_name, profile?.preferred_currency]);
+
+  // Sync capital input once when workspace/rates are first loaded if input was empty
+  useEffect(() => {
+    if (!userCapitalInput && initialUserCapThb > 0) {
+      setUserCapitalInput(initialUserCapThb.toString());
+    }
+    if (!partnerCapitalInput && initialPartnerCapThb > 0) {
+      setPartnerCapitalInput(initialPartnerCapThb.toString());
+    }
+  }, [initialUserCapThb, initialPartnerCapThb]);
 
   // Strategy management
   const [newStrategy, setNewStrategy] = useState('');
